@@ -1,0 +1,123 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: headlamp
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: headlamp
+automountServiceAccountToken: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: headlamp
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: headlamp
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  progressDeadlineSeconds: 300
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: headlamp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: headlamp
+    spec:
+      serviceAccountName: headlamp
+      automountServiceAccountToken: true
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: headlamp
+          image: __HEADLAMP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command:
+            - /headlamp/headlamp-server
+          args:
+            - -html-static-dir=/headlamp/frontend
+            - -in-cluster
+            - -plugins-dir=/headlamp/plugins
+            - -watch-plugins-changes=false
+            - -tls-cert-path=/var/run/headlamp-tls/tls.crt
+            - -tls-key-path=/var/run/headlamp-tls/tls.key
+          ports:
+            - name: https
+              containerPort: 4466
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/headlamp-tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tls
+          secret:
+            secretName: headlamp-tls
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: headlamp
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: headlamp
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: headlamp
+  ports:
+    - name: https
+      appProtocol: https
+      protocol: TCP
+      port: 443
+      targetPort: https
+      nodePort: __NODE_PORT__
