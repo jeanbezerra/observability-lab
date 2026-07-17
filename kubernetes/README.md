@@ -299,6 +299,8 @@ O código de saída é `0` quando o estado já está correto e `1` quando a etap
 
 ## Operação diária
 
+Consulte também [KUBERNETES_COMMANDS.md](KUBERNETES_COMMANDS.md) para uma referência de administração com listagens, logs, `exec`, `attach`, rollouts, Services, RBAC, diagnóstico e remoções normais ou forçadas.
+
 Estado geral:
 
 ```bash
@@ -398,6 +400,16 @@ kubectl -n kube-flannel get pods -o wide
 ```
 
 Verifique também se swap permaneceu desativada com `swapon --show` e se `br_netfilter` está carregado com `lsmod | grep br_netfilter`.
+
+### Headlamp em `CreateContainerConfigError`
+
+O manifesto fixa o usuário oficial da imagem Headlamp v0.43 como UID/GID `100:101`. Isso permite que o kubelet valide `runAsNonRoot` mesmo que a imagem declare o usuário pelo nome `headlamp`. Reexecute o instalador para substituir automaticamente o workload antigo:
+
+```bash
+sudo bash install-all.sh cluster.env
+```
+
+Se o evento também mencionar `/run/flannel/subnet.env`, a etapa 50 agora detecta o arquivo ausente ou incompatível e reinicia o DaemonSet Flannel para recriá-lo antes de continuar.
 
 ## Referências oficiais
 

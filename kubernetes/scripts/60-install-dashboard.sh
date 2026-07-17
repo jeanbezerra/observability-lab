@@ -31,7 +31,7 @@ tls_checksum() {
 }
 
 dashboard_state_ok() {
-  local actual_checksum actual_image actual_node_port actual_strategy
+  local actual_checksum actual_fs_group actual_group actual_image actual_node_port actual_strategy actual_user
   local admin_home desired_replicas ready_replicas secret_certificate local_certificate
   command -v openssl >/dev/null 2>&1 || {
     check_pending "openssl não está instalado."
@@ -115,6 +115,16 @@ dashboard_state_ok() {
       check_pending "cópia pública da CA para ${ADMIN_USER} está ausente ou desatualizada."
       return 1
     }
+  actual_user="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].securityContext.runAsUser}' 2>/dev/null)"
+  actual_group="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].securityContext.runAsGroup}' 2>/dev/null)"
+  actual_fs_group="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.template.spec.securityContext.fsGroup}' 2>/dev/null)"
+  [[ "${actual_user}" == "100" && "${actual_group}" == "101" && "${actual_fs_group}" == "101" ]] || {
+    check_pending "UID/GID do Headlamp precisa ser 100:101 para validar runAsNonRoot."
+    return 1
+  }
   [[ "$(stat -c '%U:%a' "${admin_home}/.kube/headlamp-ca.crt" 2>/dev/null)" == "${ADMIN_USER}:644" ]] || {
     check_pending "dono ou modo da CA pública de ${ADMIN_USER} está incorreto."
     return 1
@@ -162,7 +172,7 @@ remove_headlamp_workload() {
 }
 
 headlamp_workload_needs_recreation() {
-  local actual_image actual_label actual_strategy desired ready terminating_pods
+  local actual_group actual_image actual_label actual_strategy actual_user desired ready terminating_pods
   kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp >/dev/null 2>&1 || return 1
   actual_label="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
     -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}' 2>/dev/null)"
@@ -172,6 +182,10 @@ headlamp_workload_needs_recreation() {
     -o jsonpath='{.spec.strategy.type}' 2>/dev/null)"
   actual_image="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
     -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].image}' 2>/dev/null)"
+  actual_user="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].securityContext.runAsUser}' 2>/dev/null)"
+  actual_group="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].securityContext.runAsGroup}' 2>/dev/null)"
   read -r desired ready < <(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
     -o jsonpath='{.spec.replicas} {.status.readyReplicas}' 2>/dev/null)
   terminating_pods="$(kube -n "${DASHBOARD_NAMESPACE}" get pod \
@@ -180,6 +194,8 @@ headlamp_workload_needs_recreation() {
     | grep -v '^$' || true)"
   [[ "${actual_strategy}" != "Recreate" \
     || "${actual_image}" != "${HEADLAMP_IMAGE}" \
+    || "${actual_user}" != "100" \
+    || "${actual_group}" != "101" \
     || "${desired}" != "1" \
     || "${ready:-0}" != "1" \
     || -n "${terminating_pods}" ]]
