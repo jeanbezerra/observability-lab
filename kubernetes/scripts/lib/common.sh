@@ -79,7 +79,9 @@ check_pending() {
 }
 
 package_is_installed() {
-  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -Fxq 'install ok installed'
+  local package_status
+  package_status="$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)"
+  [[ "${package_status}" == *" ok installed" ]]
 }
 
 command_minor_version() {
