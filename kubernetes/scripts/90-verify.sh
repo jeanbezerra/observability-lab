@@ -22,12 +22,21 @@ actual_node_port="$(kube -n "${DASHBOARD_NAMESPACE}" get service headlamp -o jso
 [[ "${actual_node_port}" == "${DASHBOARD_NODE_PORT}" ]] \
   || die "NodePort esperado ${DASHBOARD_NODE_PORT}, encontrado ${actual_node_port}."
 
-viewer_can_list="$(kube auth can-i list pods --all-namespaces \
-  --as="system:serviceaccount:${DASHBOARD_NAMESPACE}:dashboard-viewer")"
-viewer_can_read_secrets="$(kube auth can-i get secrets --all-namespaces \
-  --as="system:serviceaccount:${DASHBOARD_NAMESPACE}:dashboard-viewer")"
-[[ "${viewer_can_list}" == "yes" ]] || die "dashboard-viewer não consegue listar Pods."
-[[ "${viewer_can_read_secrets}" == "no" ]] || die "dashboard-viewer recebeu acesso indevido a Secrets."
+viewer_identity="system:serviceaccount:${DASHBOARD_NAMESPACE}:dashboard-viewer"
+kube auth can-i list pods --all-namespaces \
+  --as="${viewer_identity}" --quiet \
+  || die "dashboard-viewer não consegue listar Pods."
+if kube auth can-i get secrets --all-namespaces \
+  --as="${viewer_identity}" --quiet; then
+  die "dashboard-viewer recebeu acesso indevido a Secrets."
+fi
+
+if is_true "${CREATE_ADMIN_SERVICE_ACCOUNT}"; then
+  admin_identity="system:serviceaccount:${DASHBOARD_NAMESPACE}:dashboard-admin"
+  kube auth can-i '*' '*' --all-namespaces \
+    --as="${admin_identity}" --quiet \
+    || die "dashboard-admin não recebeu as permissões administrativas esperadas."
+fi
 
 node_ip="$(detect_node_ip)"
 retry 12 5 curl -fsS --cacert /etc/kubernetes/pki/headlamp/ca.crt \
