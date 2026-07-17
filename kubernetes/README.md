@@ -367,7 +367,7 @@ sudo k8s-dashboard-token viewer 1h
 
 ### `old replicas are pending termination` ou timeout do Headlamp
 
-A etapa 60 usa estratégia `Recreate`, pré-baixa a imagem no containerd, remove Pods Headlamp stateless presos em `Terminating` e imprime automaticamente Pods, eventos e logs se o serviço não ficar pronto. Reexecute somente essa etapa:
+A etapa 60 usa estratégia `Recreate`, pré-baixa a imagem no containerd e, quando encontra uma migração antiga ou um rollout inconsistente, recria somente Deployment/ReplicaSets/Pods do Headlamp. Service, TLS, RBAC e os demais workloads são preservados. Enquanto aguarda, ela mostra periodicamente a fase e o motivo de espera dos Pods; ao esgotar o timeout, imprime Pods, eventos e logs automaticamente. Reexecute somente essa etapa:
 
 ```bash
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \

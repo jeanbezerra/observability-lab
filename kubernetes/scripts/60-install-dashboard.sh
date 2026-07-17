@@ -136,6 +136,77 @@ dashboard_diagnostics() {
     | tail -n 50 || true
 }
 
+headlamp_workload_absent() {
+  kube get namespace "${DASHBOARD_NAMESPACE}" >/dev/null 2>&1 || return 1
+  ! kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp >/dev/null 2>&1 \
+    && [[ -z "$(kube -n "${DASHBOARD_NAMESPACE}" get replicaset,pod \
+      -l app.kubernetes.io/name=headlamp -o name 2>/dev/null)" ]]
+}
+
+remove_headlamp_workload() {
+  local pod_name
+  warn "Recriando somente o workload Headlamp gerenciado; Service, TLS, RBAC e outros workloads serão preservados."
+  kube -n "${DASHBOARD_NAMESPACE}" delete deployment headlamp \
+    --ignore-not-found=true --cascade=background --wait=false
+  kube -n "${DASHBOARD_NAMESPACE}" delete replicaset \
+    -l app.kubernetes.io/name=headlamp \
+    --ignore-not-found=true --cascade=background --wait=false
+  while read -r pod_name; do
+    [[ -z "${pod_name}" ]] && continue
+    kube -n "${DASHBOARD_NAMESPACE}" delete pod "${pod_name}" \
+      --grace-period=0 --force --wait=false
+  done < <(kube -n "${DASHBOARD_NAMESPACE}" get pod \
+    -l app.kubernetes.io/name=headlamp -o name 2>/dev/null | sed 's#^pod/##')
+  retry 20 2 headlamp_workload_absent \
+    || die "recursos antigos do Headlamp não foram removidos em 40 segundos."
+}
+
+headlamp_workload_needs_recreation() {
+  local actual_image actual_label actual_strategy desired ready terminating_pods
+  kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp >/dev/null 2>&1 || return 1
+  actual_label="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}' 2>/dev/null)"
+  [[ "${actual_label}" == "headlamp" ]] \
+    || die "Deployment headlamp existente não possui o rótulo gerenciado; ele não será removido automaticamente."
+  actual_strategy="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.strategy.type}' 2>/dev/null)"
+  actual_image="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].image}' 2>/dev/null)"
+  read -r desired ready < <(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.replicas} {.status.readyReplicas}' 2>/dev/null)
+  terminating_pods="$(kube -n "${DASHBOARD_NAMESPACE}" get pod \
+    -l app.kubernetes.io/name=headlamp \
+    -o jsonpath='{range .items[*]}{.metadata.deletionTimestamp}{"\n"}{end}' 2>/dev/null \
+    | grep -v '^$' || true)"
+  [[ "${actual_strategy}" != "Recreate" \
+    || "${actual_image}" != "${HEADLAMP_IMAGE}" \
+    || "${desired}" != "1" \
+    || "${ready:-0}" != "1" \
+    || -n "${terminating_pods}" ]]
+}
+
+wait_for_headlamp() {
+  local elapsed=0 interval=10 timeout_seconds pod_summary ready_replicas
+  timeout_seconds="$(duration_to_seconds "${DASHBOARD_ROLLOUT_TIMEOUT}")" \
+    || die "DASHBOARD_ROLLOUT_TIMEOUT inválido: ${DASHBOARD_ROLLOUT_TIMEOUT}."
+  while (( elapsed < timeout_seconds )); do
+    if kube -n "${DASHBOARD_NAMESPACE}" rollout status deployment/headlamp \
+      --timeout=5s >/dev/null 2>&1; then
+      return 0
+    fi
+    ready_replicas="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+      -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+    pod_summary="$(kube -n "${DASHBOARD_NAMESPACE}" get pod \
+      -l app.kubernetes.io/name=headlamp \
+      -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,WAITING:.status.containerStatuses[0].state.waiting.reason,NODE:.spec.nodeName' \
+      --no-headers 2>/dev/null | tr '\n' ';' || true)"
+    log "Aguardando Headlamp: ${ready_replicas:-0}/1 pronta; ${pod_summary:-nenhum Pod criado}"
+    sleep "${interval}"
+    elapsed=$((elapsed + interval + 5))
+  done
+  return 1
+}
+
 pull_dashboard_image() {
   if command -v crictl >/dev/null 2>&1; then
     retry 3 5 crictl --runtime-endpoint=unix:///run/containerd/containerd.sock \
@@ -244,6 +315,10 @@ sed \
   -e "s|__TLS_CHECKSUM__|${checksum}|g" \
   "${PROJECT_DIR}/manifests/dashboard/headlamp.yaml" >"${rendered_manifest}"
 
+if headlamp_workload_needs_recreation; then
+  remove_headlamp_workload
+fi
+
 log "Reconciliando Dashboard Headlamp como Deployment e NodePort HTTPS."
 if ! kube apply -f "${rendered_manifest}"; then
   if kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
@@ -255,16 +330,7 @@ if ! kube apply -f "${rendered_manifest}"; then
     die "não foi possível aplicar o manifesto do Headlamp e o recurso existente não foi reconhecido como gerenciado."
   fi
 fi
-while read -r terminating_pod; do
-  [[ -z "${terminating_pod}" ]] && continue
-  warn "Pod Headlamp ${terminating_pod} ficou preso em Terminating; removendo forçadamente apenas esse Pod stateless."
-  kube -n "${DASHBOARD_NAMESPACE}" delete pod "${terminating_pod}" \
-    --grace-period=0 --force --wait=false
-done < <(kube -n "${DASHBOARD_NAMESPACE}" get pods -l app.kubernetes.io/name=headlamp \
-  -o custom-columns='NAME:.metadata.name,DELETING:.metadata.deletionTimestamp' --no-headers 2>/dev/null \
-  | awk '$2 != "<none>" {print $1}')
-if ! kube -n "${DASHBOARD_NAMESPACE}" rollout status deployment/headlamp \
-  --timeout="${DASHBOARD_ROLLOUT_TIMEOUT}"; then
+if ! wait_for_headlamp; then
   dashboard_diagnostics
   die "Headlamp não ficou pronto em ${DASHBOARD_ROLLOUT_TIMEOUT}; veja o diagnóstico acima."
 fi

@@ -216,6 +216,19 @@ retry() {
   done
 }
 
+duration_to_seconds() {
+  local duration="$1"
+  local value="${duration%?}"
+  local unit="${duration: -1}"
+  [[ "${value}" =~ ^[0-9]+$ ]] || return 1
+  case "${unit}" in
+    s) printf '%s\n' "${value}" ;;
+    m) printf '%s\n' "$((value * 60))" ;;
+    h) printf '%s\n' "$((value * 3600))" ;;
+    *) return 1 ;;
+  esac
+}
+
 on_error() {
   local exit_code="$1"
   local failed_command="$2"
