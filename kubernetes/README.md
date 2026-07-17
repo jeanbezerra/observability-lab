@@ -14,6 +14,7 @@ Este diretório instala, com um único comando, um cluster Kubernetes de nó ún
 - serviço `NodePort` HTTPS fixo em `30443`;
 - certificado e autoridade certificadora locais, gerados automaticamente;
 - usuário Linux operacional e kubeconfig protegido;
+- kubeconfig administrativo protegido também em `/root/.kube/config`;
 - identidades Kubernetes `dashboard-viewer` e, opcionalmente, `dashboard-admin`;
 - UFW instalado automaticamente, com SSH preservado e acesso remoto ao Dashboard;
 - utilitário `/usr/local/sbin/k8s-dashboard-token` para tokens temporários;
@@ -130,16 +131,26 @@ curl --cacert headlamp-ca.crt https://k8s.exemplo.com:30443/
 No navegador, acesse:
 
 ```text
-https://k8s.exemplo.com:30443
+https://k8s.exemplo.com:30443/?lng=en
 ```
 
 ou:
 
 ```text
-https://IP_PUBLICO:30443
+https://IP_PUBLICO:30443/?lng=en
 ```
 
 O IP ou nome usado no navegador precisa ter sido configurado em `DASHBOARD_PUBLIC_IP` ou `DASHBOARD_DNS_NAME` **antes** da instalação. Se mudar depois, atualize `cluster.env` e reexecute `scripts/60-install-dashboard.sh`.
+
+### Idioma do Headlamp
+
+O Headlamp detecta o idioma pelo navegador. Este projeto gera os links com `?lng=en`, definido por `DASHBOARD_DEFAULT_LANGUAGE="en"`, para selecionar inglês mesmo quando o navegador anuncia outro idioma:
+
+```text
+https://IP_DO_SERVIDOR:30443/?lng=en
+```
+
+O parâmetro também atualiza a preferência usada pela interface. Para português, use o código suportado `pt` (`?lng=pt`), não `pt-BR`.
 
 ## Confiar no certificado HTTPS
 
@@ -241,6 +252,7 @@ As opções estão documentadas em `.env.example`:
 | `DASHBOARD_DNS_NAME` | vazio | DNS incluído no SAN do certificado |
 | `DASHBOARD_PUBLIC_IP` | vazio | IPv4 público incluído no SAN do certificado |
 | `DASHBOARD_CERT_DAYS` | `825` | validade do certificado do servidor |
+| `DASHBOARD_DEFAULT_LANGUAGE` | `en` | idioma incluído nos URLs gerados para o Headlamp |
 | `DASHBOARD_ROLLOUT_TIMEOUT` | `10m` | tempo máximo para baixar/iniciar o Headlamp |
 | `CREATE_ADMIN_SERVICE_ACCOUNT` | `true` | cria a identidade administrativa do Dashboard |
 | `DEFAULT_TOKEN_DURATION` | `8h` | duração padrão de um token novo |
@@ -287,6 +299,7 @@ O código de saída é `0` quando o estado já está correto e `1` quando a etap
 |---|---|---|
 | `/etc/kubernetes/admin.conf` | root, protegido pelo kubeadm | kubeconfig administrativo original |
 | `~ADMIN_USER/.kube/config` | `0600` | cópia administrativa para `kubectl` |
+| `/root/.kube/config` | `0600` | cópia administrativa para uso direto do `kubectl` como root |
 | `/etc/kubernetes/pki/headlamp/ca.key` | `0600` | chave privada da CA; não deve sair do servidor |
 | `/etc/kubernetes/pki/headlamp/tls.key` | `0600` | chave privada HTTPS do Headlamp |
 | `~ADMIN_USER/.kube/headlamp-ca.crt` | `0644` | certificado público da CA para os clientes |
@@ -369,7 +382,11 @@ sudo k8s-dashboard-token viewer 1h
 
 ### `old replicas are pending termination` ou timeout do Headlamp
 
-A etapa 60 usa estratégia `Recreate`, pré-baixa a imagem no containerd e, quando encontra uma migração antiga ou um rollout inconsistente, recria somente Deployment/ReplicaSets/Pods do Headlamp. Service, TLS, RBAC e os demais workloads são preservados. Enquanto aguarda, ela mostra periodicamente a fase e o motivo de espera dos Pods; ao esgotar o timeout, imprime Pods, eventos e logs automaticamente. Reexecute somente essa etapa:
+A etapa 60 usa estratégia `Recreate`, pré-baixa a imagem no containerd e, quando encontra uma migração antiga ou um rollout inconsistente, recria somente Deployment/ReplicaSets/Pods do Headlamp. Service, TLS, RBAC e os demais workloads são preservados. Enquanto aguarda, ela mostra periodicamente a fase e o motivo de espera dos Pods; ao esgotar o timeout, imprime Pods, eventos e logs automaticamente.
+
+A remoção dos Pods é primeiro graciosa, com espera de até 30 segundos. `--force` só é usado para remanescentes realmente presos, reduzindo a possibilidade de scopes `cri-containerd` demorarem durante o próximo desligamento.
+
+Reexecute somente essa etapa:
 
 ```bash
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \

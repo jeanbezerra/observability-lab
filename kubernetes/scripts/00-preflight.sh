@@ -44,6 +44,10 @@ valid_ipv4_cidr "${DASHBOARD_ALLOWED_CIDR}" || die "DASHBOARD_ALLOWED_CIDR invá
 [[ "${ADMIN_GROUP}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "ADMIN_GROUP inválido: ${ADMIN_GROUP}."
 [[ "${DASHBOARD_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || die "DASHBOARD_NAMESPACE inválido."
 [[ "${HEADLAMP_IMAGE}" =~ ^[a-zA-Z0-9._/:@-]+$ ]] || die "HEADLAMP_IMAGE contém caracteres inválidos."
+case "${DASHBOARD_DEFAULT_LANGUAGE}" in
+  en|es|fr|ru|pt|de|it|zh-TW|zh|ko|ja|hi|bn|ta|ar|ur|he) ;;
+  *) die "DASHBOARD_DEFAULT_LANGUAGE não é suportado pelo Headlamp v0.43: ${DASHBOARD_DEFAULT_LANGUAGE}." ;;
+esac
 [[ "${DEFAULT_TOKEN_DURATION}" =~ ^[0-9]+(s|m|h)$ ]] || die "DEFAULT_TOKEN_DURATION deve usar s, m ou h (ex.: 8h)."
 [[ "${DASHBOARD_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)$ ]] || die "DASHBOARD_ROLLOUT_TIMEOUT deve usar s, m ou h (ex.: 10m)."
 

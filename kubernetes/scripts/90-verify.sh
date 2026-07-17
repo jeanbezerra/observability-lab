@@ -52,7 +52,7 @@ fi
 cat <<EOF
 
 Cluster validado com sucesso.
-  Dashboard: https://${access_host}:${DASHBOARD_NODE_PORT}
+  Dashboard: https://${access_host}:${DASHBOARD_NODE_PORT}/?lng=${DASHBOARD_DEFAULT_LANGUAGE}
   Token leitura: sudo k8s-dashboard-token viewer ${DEFAULT_TOKEN_DURATION}
   Token admin:   ${admin_token_hint}
   CA local:      /etc/kubernetes/pki/headlamp/ca.crt

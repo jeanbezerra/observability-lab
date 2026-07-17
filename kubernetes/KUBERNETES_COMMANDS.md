@@ -14,6 +14,8 @@ kubectl cluster-info
 kubectl get nodes
 ```
 
+O instalador também mantém `/root/.kube/config`, portanto novas sessões de `root` podem usar `kubectl` diretamente. O `export` acima continua útil como recuperação imediata quando esse arquivo ainda não foi criado.
+
 Como o usuário configurado em `ADMIN_USER`, o instalador já fornece `~/.kube/config`:
 
 ```bash
@@ -586,6 +588,27 @@ sudo ip route
 sudo ip address
 ```
 
+### Desligamento preso em `cri-containerd-*.scope`
+
+O systemd normalmente aguarda até 90 segundos para um container encerrar. Isso é especialmente visível depois de um `kubectl delete pod --force`, pois a remoção forçada apaga o objeto da API sem confirmar que o processo realmente terminou no nó.
+
+Durante o desligamento, aguarde o contador atingir o timeout antes de cortar energia. Depois que o servidor voltar:
+
+```bash
+sudo systemctl --failed
+sudo journalctl -b -1 -u kubelet -u containerd \
+  --no-pager --since "10 minutes before shutdown"
+sudo crictl ps -a
+```
+
+Prefira sempre a remoção graciosa:
+
+```bash
+kubectl delete pod POD -n NAMESPACE --wait=true --timeout=30s
+```
+
+Use `--grace-period=0 --force` somente se esse prazo expirar e o workload tolerar a possível existência temporária de duas instâncias.
+
 Kubeadm e certificados:
 
 ```bash
@@ -627,7 +650,7 @@ sudo k8s-dashboard-token admin 1h
 
 # Teste HTTPS local usando a CA do projeto
 curl --cacert /etc/kubernetes/pki/headlamp/ca.crt \
-  https://IP_DO_NO:30443/
+  'https://IP_DO_NO:30443/?lng=en'
 ```
 
 Reconciliar somente o Dashboard usando `cluster.env`:

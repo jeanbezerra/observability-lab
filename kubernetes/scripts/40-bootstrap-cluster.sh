@@ -29,7 +29,7 @@ cluster_settings_ok() {
 }
 
 cluster_state_ok() {
-  local admin_home
+  local admin_home root_home
   [[ -r "${KUBECONFIG_ADMIN}" ]] || {
     check_pending "cluster ainda não possui ${KUBECONFIG_ADMIN}."
     return 1
@@ -54,6 +54,16 @@ cluster_state_ok() {
     }
   [[ "$(stat -c '%U:%a' "${admin_home}/.kube/config" 2>/dev/null)" == "${ADMIN_USER}:600" ]] || {
     check_pending "dono ou modo do kubeconfig de ${ADMIN_USER} está incorreto."
+    return 1
+  }
+  root_home="$(getent passwd root | cut -d: -f6)"
+  [[ -n "${root_home}" && -r "${root_home}/.kube/config" ]] \
+    && cmp -s "${KUBECONFIG_ADMIN}" "${root_home}/.kube/config" || {
+      check_pending "kubeconfig do root está ausente ou desatualizado."
+      return 1
+    }
+  [[ "$(stat -c '%U:%G:%a' "${root_home}/.kube/config" 2>/dev/null)" == "root:root:600" ]] || {
+    check_pending "dono ou modo do kubeconfig do root está incorreto."
     return 1
   }
   if is_true "${SINGLE_NODE}"; then
@@ -137,6 +147,11 @@ admin_home="$(getent passwd "${ADMIN_USER}" | cut -d: -f6)"
 install -d -o "${ADMIN_USER}" -g "${primary_group}" -m 0700 "${admin_home}/.kube"
 install -o "${ADMIN_USER}" -g "${primary_group}" -m 0600 "${KUBECONFIG_ADMIN}" "${admin_home}/.kube/config"
 
+root_home="$(getent passwd root | cut -d: -f6)"
+[[ -n "${root_home}" ]] || die "home do usuário root não encontrado."
+install -d -o root -g root -m 0700 "${root_home}/.kube"
+install -o root -g root -m 0600 "${KUBECONFIG_ADMIN}" "${root_home}/.kube/config"
+
 if is_true "${SINGLE_NODE}"; then
   log "Liberando o control plane para executar workloads (cluster de nó único)."
   kube taint nodes --all node-role.kubernetes.io/control-plane- >/dev/null 2>&1 || true
@@ -144,4 +159,4 @@ if is_true "${SINGLE_NODE}"; then
 fi
 
 cluster_state_ok || die "o bootstrap terminou, mas o estado do cluster ainda está incompleto."
-log "Control plane inicializado e kubeconfig entregue a ${ADMIN_USER}."
+log "Control plane inicializado e kubeconfig entregue a ${ADMIN_USER} e root."

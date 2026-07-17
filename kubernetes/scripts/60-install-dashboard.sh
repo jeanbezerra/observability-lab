@@ -161,14 +161,21 @@ remove_headlamp_workload() {
   kube -n "${DASHBOARD_NAMESPACE}" delete replicaset \
     -l app.kubernetes.io/name=headlamp \
     --ignore-not-found=true --cascade=background --wait=false
+
+  log "Aguardando até 30 segundos pelo encerramento gracioso dos Pods Headlamp."
+  if retry 15 2 headlamp_workload_absent; then
+    return 0
+  fi
+
+  warn "Pods Headlamp não encerraram no prazo; aplicando remoção forçada somente aos remanescentes."
   while read -r pod_name; do
     [[ -z "${pod_name}" ]] && continue
     kube -n "${DASHBOARD_NAMESPACE}" delete pod "${pod_name}" \
       --grace-period=0 --force --wait=false
   done < <(kube -n "${DASHBOARD_NAMESPACE}" get pod \
     -l app.kubernetes.io/name=headlamp -o name 2>/dev/null | sed 's#^pod/##')
-  retry 20 2 headlamp_workload_absent \
-    || die "recursos antigos do Headlamp não foram removidos em 40 segundos."
+  retry 15 2 headlamp_workload_absent \
+    || die "recursos antigos do Headlamp permaneceram após as tentativas graciosa e forçada."
 }
 
 headlamp_workload_needs_recreation() {
@@ -358,4 +365,4 @@ install -o "${ADMIN_USER}" -g "${primary_group}" -m 0644 \
   "${cert_dir}/ca.crt" "${admin_home}/.kube/headlamp-ca.crt"
 
 dashboard_state_ok || die "o Dashboard foi aplicado, mas a verificação de estado ainda falha."
-log "Dashboard instalado em https://${node_ip}:${DASHBOARD_NODE_PORT}."
+log "Dashboard instalado em https://${node_ip}:${DASHBOARD_NODE_PORT}/?lng=${DASHBOARD_DEFAULT_LANGUAGE}."
