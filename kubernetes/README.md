@@ -236,6 +236,7 @@ As opções estão documentadas em `.env.example`:
 | `DASHBOARD_DNS_NAME` | vazio | DNS incluído no SAN do certificado |
 | `DASHBOARD_PUBLIC_IP` | vazio | IPv4 público incluído no SAN do certificado |
 | `DASHBOARD_CERT_DAYS` | `825` | validade do certificado do servidor |
+| `DASHBOARD_ROLLOUT_TIMEOUT` | `10m` | tempo máximo para baixar/iniciar o Headlamp |
 | `CREATE_ADMIN_SERVICE_ACCOUNT` | `true` | cria a identidade administrativa do Dashboard |
 | `DEFAULT_TOKEN_DURATION` | `8h` | duração padrão de um token novo |
 | `ENABLE_UFW` | `true` | configura e ativa UFW |
@@ -345,6 +346,30 @@ Gere outro token e confira o relógio do servidor:
 ```bash
 timedatectl status
 sudo k8s-dashboard-token viewer 1h
+```
+
+### `old replicas are pending termination` ou timeout do Headlamp
+
+A etapa 60 usa estratégia `Recreate`, pré-baixa a imagem no containerd e imprime automaticamente Pods, eventos e logs se o Headlamp não ficar pronto. Reexecute somente essa etapa:
+
+```bash
+sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
+  bash scripts/60-install-dashboard.sh
+```
+
+`kubeadm config images pull` não baixa o Headlamp; esse comando cobre apenas as imagens do control plane. Para testar o Dashboard diretamente:
+
+```bash
+sudo crictl --runtime-endpoint=unix:///run/containerd/containerd.sock \
+  pull ghcr.io/headlamp-k8s/headlamp:v0.43.0
+```
+
+Se uma versão antiga do Deployment continuar presa em `Terminating`, remova somente o Deployment do Dashboard e reexecute a etapa 60. O cluster e os demais workloads não são afetados:
+
+```bash
+kubectl -n kubernetes-dashboard delete deployment headlamp
+sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
+  bash scripts/60-install-dashboard.sh
 ```
 
 ### Nó `NotReady`

@@ -45,6 +45,7 @@ valid_ipv4_cidr "${DASHBOARD_ALLOWED_CIDR}" || die "DASHBOARD_ALLOWED_CIDR invá
 [[ "${DASHBOARD_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || die "DASHBOARD_NAMESPACE inválido."
 [[ "${HEADLAMP_IMAGE}" =~ ^[a-zA-Z0-9._/:@-]+$ ]] || die "HEADLAMP_IMAGE contém caracteres inválidos."
 [[ "${DEFAULT_TOKEN_DURATION}" =~ ^[0-9]+(s|m|h)$ ]] || die "DEFAULT_TOKEN_DURATION deve usar s, m ou h (ex.: 8h)."
+[[ "${DASHBOARD_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)$ ]] || die "DASHBOARD_ROLLOUT_TIMEOUT deve usar s, m ou h (ex.: 10m)."
 
 if [[ -n "${NODE_IP}" ]]; then
   valid_ipv4 "${NODE_IP}" || die "NODE_IP inválido."

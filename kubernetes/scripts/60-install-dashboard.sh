@@ -6,6 +6,8 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 require_root
 require_command openssl
 require_command sed
+require_command sha256sum
+require_command crictl
 
 node_ip="$(detect_node_ip)"
 node_name="$(effective_node_name)"
@@ -20,6 +22,21 @@ cleanup() {
   rm -f -- "${cert_dir}/server.csr"
 }
 trap cleanup EXIT
+
+dashboard_diagnostics() {
+  warn "O rollout do Headlamp falhou. Coletando diagnóstico do namespace ${DASHBOARD_NAMESPACE}."
+  kube -n "${DASHBOARD_NAMESPACE}" get deployment,replicaset,pod,service -o wide || true
+  printf '\n--- DESCRIBE DEPLOYMENT ---\n' >&2
+  kube -n "${DASHBOARD_NAMESPACE}" describe deployment/headlamp || true
+  printf '\n--- DESCRIBE PODS ---\n' >&2
+  kube -n "${DASHBOARD_NAMESPACE}" describe pods -l app.kubernetes.io/name=headlamp || true
+  printf '\n--- LOGS ---\n' >&2
+  kube -n "${DASHBOARD_NAMESPACE}" logs \
+    -l app.kubernetes.io/name=headlamp --all-containers=true --prefix --tail=100 || true
+  printf '\n--- EVENTOS RECENTES ---\n' >&2
+  kube -n "${DASHBOARD_NAMESPACE}" get events --sort-by=.metadata.creationTimestamp \
+    | tail -n 50 || true
+}
 
 if [[ ! -s "${cert_dir}/ca.crt" || ! -s "${cert_dir}/ca.key" ]]; then
   log "Criando autoridade certificadora local para o Dashboard."
@@ -77,6 +94,12 @@ fi
 chmod 0600 "${cert_dir}/ca.key" "${cert_dir}/tls.key"
 chmod 0644 "${cert_dir}/ca.crt" "${cert_dir}/tls.crt" "${cert_dir}/server.sans"
 
+log "Garantindo que a imagem ${HEADLAMP_IMAGE} esteja disponível no containerd."
+if ! retry 3 5 crictl --runtime-endpoint=unix:///run/containerd/containerd.sock \
+  pull "${HEADLAMP_IMAGE}"; then
+  die "não foi possível baixar ${HEADLAMP_IMAGE} do GHCR; verifique DNS, proxy e acesso a ghcr.io."
+fi
+
 kube create namespace "${DASHBOARD_NAMESPACE}" --dry-run=client -o yaml | kube apply -f -
 kube -n "${DASHBOARD_NAMESPACE}" create secret tls headlamp-tls \
   --cert="${cert_dir}/tls.crt" \
@@ -84,16 +107,21 @@ kube -n "${DASHBOARD_NAMESPACE}" create secret tls headlamp-tls \
   --dry-run=client -o yaml | kube apply -f -
 
 rendered_manifest="$(mktemp)"
+tls_checksum="$(sha256sum "${cert_dir}/tls.crt" "${cert_dir}/tls.key" | sha256sum | awk '{print $1}')"
 sed \
   -e "s|__NAMESPACE__|${DASHBOARD_NAMESPACE}|g" \
   -e "s|__NODE_PORT__|${DASHBOARD_NODE_PORT}|g" \
   -e "s|__HEADLAMP_IMAGE__|${HEADLAMP_IMAGE}|g" \
+  -e "s|__TLS_CHECKSUM__|${tls_checksum}|g" \
   "${PROJECT_DIR}/manifests/dashboard/headlamp.yaml" >"${rendered_manifest}"
 
 log "Instalando Dashboard Headlamp como Deployment e NodePort HTTPS."
 kube apply -f "${rendered_manifest}"
-kube -n "${DASHBOARD_NAMESPACE}" rollout restart deployment/headlamp >/dev/null
-kube -n "${DASHBOARD_NAMESPACE}" rollout status deployment/headlamp --timeout=5m
+if ! kube -n "${DASHBOARD_NAMESPACE}" rollout status deployment/headlamp \
+  --timeout="${DASHBOARD_ROLLOUT_TIMEOUT}"; then
+  dashboard_diagnostics
+  die "Headlamp não ficou pronto em ${DASHBOARD_ROLLOUT_TIMEOUT}; veja o diagnóstico acima."
+fi
 
 primary_group="$(id -gn "${ADMIN_USER}")"
 admin_home="$(getent passwd "${ADMIN_USER}" | cut -d: -f6)"

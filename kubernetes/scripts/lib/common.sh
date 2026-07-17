@@ -35,6 +35,7 @@ DASHBOARD_DNS_NAME="${DASHBOARD_DNS_NAME:-}"
 DASHBOARD_PUBLIC_IP="${DASHBOARD_PUBLIC_IP:-}"
 DASHBOARD_CERT_DAYS="${DASHBOARD_CERT_DAYS:-825}"
 HEADLAMP_IMAGE="${HEADLAMP_IMAGE:-ghcr.io/headlamp-k8s/headlamp:v0.43.0}"
+DASHBOARD_ROLLOUT_TIMEOUT="${DASHBOARD_ROLLOUT_TIMEOUT:-10m}"
 CREATE_ADMIN_SERVICE_ACCOUNT="${CREATE_ADMIN_SERVICE_ACCOUNT:-true}"
 DEFAULT_TOKEN_DURATION="${DEFAULT_TOKEN_DURATION:-8h}"
 FLANNEL_VERSION="${FLANNEL_VERSION:-v0.28.4}"
@@ -144,10 +145,14 @@ retry() {
 }
 
 on_error() {
-  local exit_code=$?
-  printf '\033[1;31m[ERRO]\033[0m %s falhou na linha %s (código %s).\n' \
-    "$(basename -- "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")" "${BASH_LINENO[0]:-?}" "${exit_code}" >&2
+  local exit_code="$1"
+  local failed_command="$2"
+  local failed_line="$3"
+  local failed_source="$4"
+  trap - ERR
+  printf '\033[1;31m[ERRO]\033[0m %s:%s falhou (código %s). Comando: %s\n' \
+    "$(basename -- "${failed_source}")" "${failed_line}" "${exit_code}" "${failed_command}" >&2
   exit "${exit_code}"
 }
 
-trap on_error ERR
+trap 'on_error "$?" "$BASH_COMMAND" "$LINENO" "${BASH_SOURCE[0]:-$0}"' ERR
