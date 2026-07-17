@@ -43,6 +43,7 @@ FLANNEL_SHA256="${FLANNEL_SHA256:-d078019743c5e0194ce965125fc80ef00af0c1661ec9e1
 ENABLE_UFW="${ENABLE_UFW:-true}"
 SSH_PORT="${SSH_PORT:-22}"
 ALLOW_UNSUPPORTED_OS="${ALLOW_UNSUPPORTED_OS:-false}"
+AUTO_REPAIR_PARTIAL_CLUSTER="${AUTO_REPAIR_PARTIAL_CLUSTER:-true}"
 KUBECONFIG_ADMIN="${KUBECONFIG_ADMIN:-/etc/kubernetes/admin.conf}"
 BOOTSTRAP_STATE_DIR="${BOOTSTRAP_STATE_DIR:-/var/lib/k8s-bootstrap}"
 
@@ -67,6 +68,35 @@ require_root() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "comando obrigatório não encontrado: $1"
+}
+
+check_requested() {
+  [[ "${1:-}" == "--check" ]]
+}
+
+check_pending() {
+  printf '\033[1;33m[PENDENTE]\033[0m %s\n' "$*" >&2
+}
+
+package_is_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -Fxq 'install ok installed'
+}
+
+command_minor_version() {
+  local command_name="$1"
+  local output
+  case "${command_name}" in
+    kubeadm) output="$(kubeadm version -o short 2>/dev/null || true)" ;;
+    kubelet) output="$(kubelet --version 2>/dev/null | awk '{print $2}' || true)" ;;
+    kubectl) output="$(kubectl version --client -o json 2>/dev/null | sed -n 's/.*"gitVersion"[[:space:]]*:[[:space:]]*"\(v[0-9]*\.[0-9]*\).*".*/\1/p' || true)" ;;
+    crictl) output="$(crictl --version 2>/dev/null | awk '{print $NF}' || true)" ;;
+    *) return 1 ;;
+  esac
+  if [[ "${command_name}" == "kubectl" ]]; then
+    printf '%s\n' "${output}"
+  else
+    sed -n 's/^\(v[0-9]*\.[0-9]*\).*/\1/p' <<<"${output}"
+  fi
 }
 
 is_true() {
@@ -127,6 +157,46 @@ kube() {
 
 ensure_state_dir() {
   install -d -o root -g root -m 0700 "${BOOTSTRAP_STATE_DIR}"
+}
+
+desired_state_fingerprint() {
+  printf '%s\n' \
+    "KUBERNETES_MINOR=${KUBERNETES_MINOR}" \
+    "POD_NETWORK_CIDR=${POD_NETWORK_CIDR}" \
+    "SERVICE_CIDR=${SERVICE_CIDR}" \
+    "NODE_IP=${NODE_IP}" \
+    "NODE_NAME=${NODE_NAME}" \
+    "ADMIN_USER=${ADMIN_USER}" \
+    "ADMIN_GROUP=${ADMIN_GROUP}" \
+    "SINGLE_NODE=${SINGLE_NODE}" \
+    "DASHBOARD_NAMESPACE=${DASHBOARD_NAMESPACE}" \
+    "DASHBOARD_NODE_PORT=${DASHBOARD_NODE_PORT}" \
+    "DASHBOARD_ALLOWED_CIDR=${DASHBOARD_ALLOWED_CIDR}" \
+    "DASHBOARD_DNS_NAME=${DASHBOARD_DNS_NAME}" \
+    "DASHBOARD_PUBLIC_IP=${DASHBOARD_PUBLIC_IP}" \
+    "HEADLAMP_IMAGE=${HEADLAMP_IMAGE}" \
+    "CREATE_ADMIN_SERVICE_ACCOUNT=${CREATE_ADMIN_SERVICE_ACCOUNT}" \
+    "FLANNEL_VERSION=${FLANNEL_VERSION}" \
+    "ENABLE_UFW=${ENABLE_UFW}" \
+    | sha256sum | awk '{print $1}'
+}
+
+mark_step_complete() {
+  local step="$1"
+  local steps_dir="${BOOTSTRAP_STATE_DIR}/steps"
+  local state_file="${steps_dir}/${step}.state"
+  local temporary_state
+  ensure_state_dir
+  install -d -o root -g root -m 0700 "${steps_dir}"
+  temporary_state="$(mktemp "${steps_dir}/.${step}.XXXXXX")"
+  {
+    printf 'completed_at=%q\n' "$(date --iso-8601=seconds)"
+    printf 'config_fingerprint=%q\n' "$(desired_state_fingerprint)"
+  } >"${temporary_state}"
+  chmod 0600 "${temporary_state}"
+  mv -f -- "${temporary_state}" "${state_file}"
+  printf '%s\n' "${step}" >"${BOOTSTRAP_STATE_DIR}/last-successful-step"
+  chmod 0600 "${BOOTSTRAP_STATE_DIR}/last-successful-step"
 }
 
 retry() {

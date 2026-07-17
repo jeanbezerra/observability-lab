@@ -4,6 +4,46 @@
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 require_root
+
+network_state_ok() {
+  local desired ready updated images network_config coredns_desired coredns_ready
+  kube --request-timeout=5s -n kube-flannel get daemonset kube-flannel-ds >/dev/null 2>&1 || {
+    check_pending "DaemonSet do Flannel não existe."
+    return 1
+  }
+  images="$(kube -n kube-flannel get daemonset kube-flannel-ds \
+    -o jsonpath='{.spec.template.spec.initContainers[*].image} {.spec.template.spec.containers[*].image}' 2>/dev/null)"
+  grep -Fq ":${FLANNEL_VERSION}" <<<"${images}" || {
+    check_pending "Flannel instalado não está na versão ${FLANNEL_VERSION}."
+    return 1
+  }
+  network_config="$(kube -n kube-flannel get configmap kube-flannel-cfg \
+    -o jsonpath='{.data.net-conf\.json}' 2>/dev/null)"
+  grep -Fq "\"Network\": \"${POD_NETWORK_CIDR}\"" <<<"${network_config}" || {
+    check_pending "CIDR configurado no Flannel difere de ${POD_NETWORK_CIDR}."
+    return 1
+  }
+  read -r desired ready updated < <(kube -n kube-flannel get daemonset kube-flannel-ds \
+    -o jsonpath='{.status.desiredNumberScheduled} {.status.numberReady} {.status.updatedNumberScheduled}' 2>/dev/null)
+  [[ -n "${desired}" && "${desired}" != "0" && "${desired}" == "${ready}" && "${desired}" == "${updated}" ]] || {
+    check_pending "Pods do Flannel ainda não estão todos prontos."
+    return 1
+  }
+  read -r coredns_desired coredns_ready < <(kube -n kube-system get deployment coredns \
+    -o jsonpath='{.status.replicas} {.status.readyReplicas}' 2>/dev/null)
+  [[ -n "${coredns_desired}" && "${coredns_desired}" != "0" && "${coredns_desired}" == "${coredns_ready}" ]] || {
+    check_pending "CoreDNS ainda não está pronto."
+    return 1
+  }
+}
+
+if check_requested "${1:-}"; then
+  if network_state_ok; then
+    exit 0
+  fi
+  exit 1
+fi
+
 require_command curl
 require_command sha256sum
 
@@ -24,4 +64,5 @@ kube apply -f "${manifest}"
 kube rollout status daemonset/kube-flannel-ds -n kube-flannel --timeout=5m
 kube rollout status deployment/coredns -n kube-system --timeout=5m
 
+network_state_ok || die "a rede foi aplicada, mas Flannel/CoreDNS ainda não atingiram o estado esperado."
 log "Rede de Pods instalada."

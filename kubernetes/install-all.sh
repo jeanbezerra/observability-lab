@@ -24,8 +24,18 @@ find "${ROOT_DIR}/scripts" -type f -name '*.sh' -exec chmod 0750 {} +
 chmod 0750 "${ROOT_DIR}/install-all.sh"
 find "${ROOT_DIR}/manifests" -type f -exec chmod 0640 {} +
 
+# shellcheck source=scripts/lib/common.sh
+source "${ROOT_DIR}/scripts/lib/common.sh"
+
+if command -v flock >/dev/null 2>&1; then
+  exec 9>/run/lock/k8s-bootstrap.lock
+  flock -n 9 || die "já existe outra execução do instalador em andamento."
+fi
+
+"${ROOT_DIR}/scripts/00-preflight.sh"
+mark_step_complete "00-preflight"
+
 steps=(
-  00-preflight.sh
   10-prepare-host.sh
   20-install-containerd.sh
   30-install-kubernetes.sh
@@ -34,12 +44,26 @@ steps=(
   60-install-dashboard.sh
   70-configure-firewall.sh
   80-create-users.sh
-  90-verify.sh
 )
 
 for step in "${steps[@]}"; do
-  printf '\n\033[1;36m==> Executando %s\033[0m\n' "${step}"
-  "${ROOT_DIR}/scripts/${step}"
+  step_path="${ROOT_DIR}/scripts/${step}"
+  step_name="${step%.sh}"
+  printf '\n\033[1;36m==> Verificando %s\033[0m\n' "${step}"
+  if "${step_path}" --check; then
+    log "${step}: estado já está correto; nenhuma alteração necessária."
+  else
+    printf '\033[1;36m==> Reconciliando %s\033[0m\n' "${step}"
+    "${step_path}"
+    if ! "${step_path}" --check; then
+      die "${step} terminou, mas a verificação pós-execução ainda falha."
+    fi
+  fi
+  mark_step_complete "${step_name}"
 done
+
+printf '\n\033[1;36m==> Executando verificação final\033[0m\n'
+"${ROOT_DIR}/scripts/90-verify.sh"
+mark_step_complete "90-verify"
 
 printf '\n\033[1;32mInstalação concluída. Consulte %s/README.md para acessar o Dashboard.\033[0m\n' "${ROOT_DIR}"

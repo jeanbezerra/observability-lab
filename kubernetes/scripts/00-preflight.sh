@@ -47,6 +47,14 @@ valid_ipv4_cidr "${DASHBOARD_ALLOWED_CIDR}" || die "DASHBOARD_ALLOWED_CIDR invá
 [[ "${DEFAULT_TOKEN_DURATION}" =~ ^[0-9]+(s|m|h)$ ]] || die "DEFAULT_TOKEN_DURATION deve usar s, m ou h (ex.: 8h)."
 [[ "${DASHBOARD_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)$ ]] || die "DASHBOARD_ROLLOUT_TIMEOUT deve usar s, m ou h (ex.: 10m)."
 
+for boolean_name in SINGLE_NODE CREATE_ADMIN_SERVICE_ACCOUNT ENABLE_UFW ALLOW_UNSUPPORTED_OS AUTO_REPAIR_PARTIAL_CLUSTER; do
+  boolean_value="${!boolean_name}"
+  case "${boolean_value,,}" in
+    1|0|true|false|yes|no|sim|nao|on|off) ;;
+    *) die "${boolean_name} precisa ser true ou false; recebido: ${boolean_value}." ;;
+  esac
+done
+
 if [[ -n "${NODE_IP}" ]]; then
   valid_ipv4 "${NODE_IP}" || die "NODE_IP inválido."
 fi
@@ -62,11 +70,12 @@ node_name="$(effective_node_name)"
 [[ "${node_name}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] || die "NODE_NAME/hostname inválido para Kubernetes: ${node_name}."
 
 if [[ ! -f "${KUBECONFIG_ADMIN}" ]] && command -v ss >/dev/null 2>&1 && ss -H -ltn 'sport = :6443' | grep -q .; then
-  die "a porta 6443 já está em uso, mas ${KUBECONFIG_ADMIN} não existe."
+  warn "a porta 6443 está em uso sem ${KUBECONFIG_ADMIN}; a etapa de bootstrap avaliará e reparará apenas resíduos de uma inicialização interrompida."
 fi
 
 for host in pkgs.k8s.io registry.k8s.io github.com ghcr.io; do
-  getent ahosts "${host}" >/dev/null 2>&1 || die "não foi possível resolver ${host}; verifique DNS/Internet."
+  getent ahosts "${host}" >/dev/null 2>&1 \
+    || warn "não foi possível resolver ${host} agora; a execução continuará se o componente correspondente já estiver instalado."
 done
 
 log "Host aprovado: ${cpu_count} CPUs, $((memory_kib / 1024)) MiB RAM, nó ${node_name} (${detected_ip})."

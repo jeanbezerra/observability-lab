@@ -8,13 +8,14 @@ Este diretório instala, com um único comando, um cluster Kubernetes de nó ún
 
 - Kubernetes `v1.36` pelo repositório oficial `pkgs.k8s.io`;
 - `containerd` fornecido pelo Ubuntu 26.04, configurado com cgroups `systemd`;
+- `cri-tools`/`crictl`, configurado para o socket do containerd;
 - Flannel `v0.28.4` como CNI, com download validado por SHA-256;
 - Headlamp `v0.43.0`, executado como `Deployment` e reiniciado automaticamente;
 - serviço `NodePort` HTTPS fixo em `30443`;
 - certificado e autoridade certificadora locais, gerados automaticamente;
 - usuário Linux operacional e kubeconfig protegido;
 - identidades Kubernetes `dashboard-viewer` e, opcionalmente, `dashboard-admin`;
-- UFW com SSH preservado e acesso remoto ao Dashboard;
+- UFW instalado automaticamente, com SSH preservado e acesso remoto ao Dashboard;
 - utilitário `/usr/local/sbin/k8s-dashboard-token` para tokens temporários;
 - validação final do nó, CNI, DNS, RBAC, TLS e endpoint HTTPS do nó.
 
@@ -94,7 +95,11 @@ Execute toda a instalação:
 sudo bash install-all.sh cluster.env
 ```
 
-Os scripts são idempotentes para o fluxo normal: podem ser executados novamente para concluir uma instalação interrompida ou reaplicar configurações. O instalador não executa `kubeadm reset`, não apaga workloads e não recria um cluster já inicializado.
+Os scripts são reconciliadores e podem ser executados quantas vezes forem necessárias. Antes de cada etapa, `install-all.sh` chama o modo somente leitura `--check`: se o estado real estiver correto, a etapa é ignorada; se algo estiver ausente, desatualizado ou incompatível, somente essa etapa é executada e validada novamente. Checkpoints informativos ficam em `/var/lib/k8s-bootstrap/steps`, mas nunca substituem a inspeção do estado real.
+
+Um cluster que possua `admin.conf` nunca é resetado automaticamente. Se a API estiver temporariamente indisponível, o instalador tenta recuperar `containerd`/`kubelet` e preserva os dados. `kubeadm reset` só é permitido quando `AUTO_REPAIR_PARTIAL_CLUSTER=true`, não existe `admin.conf` e existem resíduos concretos de um `kubeadm init` interrompido; antes disso, `/etc/kubernetes` é salvo em `/var/lib/k8s-bootstrap/backups`.
+
+Remoções automáticas são limitadas aos objetos que esta automação gerencia: pacotes Kubernetes incompatíveis de uma instalação ainda não inicializada, um Deployment Headlamp incompatível, regras UFW identificadas pelos comentários do instalador e a identidade `dashboard-admin` quando desativada. Workloads e regras de firewall de terceiros são preservados.
 
 ## Liberar acesso fora da rede do servidor
 
@@ -241,6 +246,7 @@ As opções estão documentadas em `.env.example`:
 | `DEFAULT_TOKEN_DURATION` | `8h` | duração padrão de um token novo |
 | `ENABLE_UFW` | `true` | configura e ativa UFW |
 | `SSH_PORT` | `22` | porta liberada antes da ativação do UFW |
+| `AUTO_REPAIR_PARTIAL_CLUSTER` | `true` | repara somente resíduos de bootstrap sem `admin.conf` |
 
 `cluster.env` é carregado como configuração Bash e deve ser editado somente por administradores. Ele está ignorado por `.gitignore` e deve permanecer com modo `0600`.
 
@@ -251,11 +257,11 @@ As opções estão documentadas em `.env.example`:
 | 00 | `00-preflight.sh` | valida Ubuntu, hardware, rede, nomes, portas e variáveis |
 | 10 | `10-prepare-host.sh` | instala utilitários, cria usuário/grupo, desativa swap e configura kernel |
 | 20 | `20-install-containerd.sh` | instala/configura containerd 2.x com cgroup systemd |
-| 30 | `30-install-kubernetes.sh` | configura o APT oficial e instala kubelet/kubeadm/kubectl |
+| 30 | `30-install-kubernetes.sh` | configura o APT oficial e instala kubelet/kubeadm/kubectl/crictl |
 | 40 | `40-bootstrap-cluster.sh` | executa `kubeadm init`, instala kubeconfig e configura nó único |
 | 50 | `50-install-network.sh` | valida e aplica o manifesto Flannel |
 | 60 | `60-install-dashboard.sh` | emite TLS, instala Headlamp e cria o NodePort persistente |
-| 70 | `70-configure-firewall.sh` | preserva SSH, libera CNI e abre a porta do Dashboard no UFW |
+| 70 | `70-configure-firewall.sh` | instala o UFW se necessário, preserva SSH, libera CNI e abre o Dashboard |
 | 80 | `80-create-users.sh` | aplica RBAC e instala o emissor de tokens |
 | 90 | `90-verify.sh` | testa systemd, nó, CNI, DNS, RBAC e HTTPS |
 
@@ -265,6 +271,15 @@ Para reexecutar apenas uma etapa usando a configuração:
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
   bash scripts/60-install-dashboard.sh
 ```
+
+Para apenas inspecionar uma etapa, sem alterar o host ou o cluster:
+
+```bash
+sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
+  bash scripts/60-install-dashboard.sh --check
+```
+
+O código de saída é `0` quando o estado já está correto e `1` quando a etapa precisa ser reconciliada. A forma recomendada de retomar uma execução interrompida continua sendo executar `install-all.sh` novamente; ele encontra automaticamente o primeiro estado pendente.
 
 ## Permissões e arquivos gerados
 
@@ -276,6 +291,8 @@ sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
 | `/etc/kubernetes/pki/headlamp/tls.key` | `0600` | chave privada HTTPS do Headlamp |
 | `~ADMIN_USER/.kube/headlamp-ca.crt` | `0644` | certificado público da CA para os clientes |
 | `/var/lib/k8s-bootstrap/kubeadm-init.log` | `0600` | saída inicial do kubeadm, potencialmente sensível |
+| `/var/lib/k8s-bootstrap/steps/*.state` | `0600` | checkpoints informativos das etapas concluídas |
+| `/var/lib/k8s-bootstrap/backups/` | `0700` | cópias de segurança antes de reparos controlados |
 | `/usr/local/sbin/k8s-dashboard-token` | `0750`, grupo operador | emissor de tokens temporários |
 
 `install-all.sh` também normaliza os scripts para `0750` e os manifests para `0640`, inclusive quando a pasta foi copiada de Windows ou extraída de ZIP.
@@ -350,21 +367,21 @@ sudo k8s-dashboard-token viewer 1h
 
 ### `old replicas are pending termination` ou timeout do Headlamp
 
-A etapa 60 usa estratégia `Recreate`, pré-baixa a imagem no containerd e imprime automaticamente Pods, eventos e logs se o Headlamp não ficar pronto. Reexecute somente essa etapa:
+A etapa 60 usa estratégia `Recreate`, pré-baixa a imagem no containerd, remove Pods Headlamp stateless presos em `Terminating` e imprime automaticamente Pods, eventos e logs se o serviço não ficar pronto. Reexecute somente essa etapa:
 
 ```bash
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
   bash scripts/60-install-dashboard.sh
 ```
 
-`kubeadm config images pull` não baixa o Headlamp; esse comando cobre apenas as imagens do control plane. Para testar o Dashboard diretamente:
+`kubeadm config images pull` não baixa o Headlamp; esse comando cobre apenas as imagens do control plane. A instalação normal fornece `crictl` pelo pacote `cri-tools`; se a etapa 60 for executada isoladamente antes disso, ela usa `ctr` como fallback. Para testar o Dashboard diretamente:
 
 ```bash
 sudo crictl --runtime-endpoint=unix:///run/containerd/containerd.sock \
   pull ghcr.io/headlamp-k8s/headlamp:v0.43.0
 ```
 
-Se uma versão antiga do Deployment continuar presa em `Terminating`, remova somente o Deployment do Dashboard e reexecute a etapa 60. O cluster e os demais workloads não são afetados:
+Como último recurso, se o recurso gerenciado continuar inconsistente mesmo após a reconciliação automática, remova somente o Deployment do Dashboard e reexecute a etapa 60. O cluster e os demais workloads não são afetados:
 
 ```bash
 kubectl -n kubernetes-dashboard delete deployment headlamp
@@ -387,6 +404,7 @@ Verifique também se swap permaneceu desativada com `swapon --show` e se `br_net
 - [Ubuntu 26.04 LTS release notes](https://documentation.ubuntu.com/release-notes/26.04/)
 - [Instalação do kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/)
 - [Container runtimes e cgroups systemd](https://kubernetes.io/docs/setup/production-environment/container-runtimes/)
+- [`crictl` e configuração dos endpoints CRI](https://kubernetes.io/docs/tasks/debug/debug-cluster/crictl/)
 - [Criação de cluster com kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/)
 - [Flannel](https://github.com/flannel-io/flannel)
 - [Headlamp in-cluster](https://headlamp.dev/docs/latest/installation/in-cluster/)
