@@ -15,7 +15,7 @@ No ambiente deste laboratório, o problema foi resolvido habilitando o **Gracefu
 Edite:
 
 ```bash
-sudo nano /var/lib/kubelet/config.yaml
+sudo vim /var/lib/kubelet/config.yaml
 ```
 
 Localize:
