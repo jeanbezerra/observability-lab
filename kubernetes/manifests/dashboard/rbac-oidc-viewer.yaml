@@ -1,0 +1,26 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: headlamp-oidc-viewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: Group
+    name: __OIDC_GROUPS_PREFIX____OIDC_VIEWER_GROUP__
+    apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: headlamp-oidc-cluster-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dashboard-cluster-observer
+subjects:
+  - kind: Group
+    name: __OIDC_GROUPS_PREFIX____OIDC_VIEWER_GROUP__
+    apiGroup: rbac.authorization.k8s.io
+

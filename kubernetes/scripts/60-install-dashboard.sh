@@ -19,10 +19,20 @@ if [[ -r /etc/k8s-bootstrap/dashboard.env ]]; then
 fi
 extension_file=""
 rendered_manifest=""
+base_manifest=""
+oidc_env_fragment=""
+oidc_volume_mount_fragment=""
+oidc_volume_fragment=""
+oidc_secret_file=""
 
 cleanup() {
   [[ -z "${extension_file}" ]] || rm -f -- "${extension_file}"
   [[ -z "${rendered_manifest}" ]] || rm -f -- "${rendered_manifest}"
+  [[ -z "${base_manifest}" ]] || rm -f -- "${base_manifest}"
+  [[ -z "${oidc_env_fragment}" ]] || rm -f -- "${oidc_env_fragment}"
+  [[ -z "${oidc_volume_mount_fragment}" ]] || rm -f -- "${oidc_volume_mount_fragment}"
+  [[ -z "${oidc_volume_fragment}" ]] || rm -f -- "${oidc_volume_fragment}"
+  [[ -z "${oidc_secret_file}" ]] || rm -f -- "${oidc_secret_file}"
 }
 trap cleanup EXIT
 
@@ -30,9 +40,22 @@ tls_checksum() {
   sha256sum "${cert_dir}/tls.crt" "${cert_dir}/tls.key" | sha256sum | awk '{print $1}'
 }
 
+oidc_checksum() {
+  if ! is_true "${ENABLE_OIDC}"; then
+    printf 'disabled' | sha256sum | awk '{print $1}'
+    return
+  fi
+  {
+    printf '%s\n' "${OIDC_CLIENT_ID}" "${OIDC_ISSUER_URL}" "${HEADLAMP_OIDC_SCOPES}"
+    printf '%s' "${HEADLAMP_OIDC_CLIENT_SECRET}" | sha256sum
+    [[ -z "${OIDC_CA_FILE}" ]] || sha256sum "${OIDC_CA_FILE}"
+  } | sha256sum | awk '{print $1}'
+}
+
 dashboard_state_ok() {
   local actual_checksum actual_fs_group actual_group actual_image actual_node_port actual_strategy actual_user
-  local admin_home desired_replicas ready_replicas secret_certificate local_certificate
+  local actual_oidc_checksum actual_oidc_client actual_oidc_issuer actual_oidc_scopes actual_oidc_secret_ref
+  local admin_home desired_replicas ready_replicas secret_certificate local_certificate secret_oidc local_oidc
   command -v openssl >/dev/null 2>&1 || {
     check_pending "openssl não está instalado."
     return 1
@@ -97,6 +120,50 @@ dashboard_state_ok() {
     check_pending "Pod do Headlamp ainda não referencia o certificado TLS atual."
     return 1
   }
+  actual_oidc_checksum="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.template.metadata.annotations.bootstrap\.k8s\.io/oidc-checksum}' 2>/dev/null)"
+  [[ "${actual_oidc_checksum}" == "$(oidc_checksum)" ]] || {
+    check_pending "Pod do Headlamp ainda não referencia a configuração OIDC atual."
+    return 1
+  }
+  actual_oidc_client="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].env[?(@.name=="HEADLAMP_CONFIG_OIDC_CLIENT_ID")].value}' 2>/dev/null)"
+  if is_true "${ENABLE_OIDC}"; then
+    actual_oidc_issuer="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].env[?(@.name=="HEADLAMP_CONFIG_OIDC_IDP_ISSUER_URL")].value}' 2>/dev/null)"
+    actual_oidc_scopes="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].env[?(@.name=="HEADLAMP_CONFIG_OIDC_SCOPES")].value}' 2>/dev/null)"
+    actual_oidc_secret_ref="$(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].env[?(@.name=="HEADLAMP_CONFIG_OIDC_CLIENT_SECRET")].valueFrom.secretKeyRef.name}' 2>/dev/null)"
+    [[ "${actual_oidc_client}" == "${OIDC_CLIENT_ID}" \
+      && "${actual_oidc_issuer}" == "${OIDC_ISSUER_URL}" \
+      && "${actual_oidc_scopes}" == "${HEADLAMP_OIDC_SCOPES}" \
+      && "${actual_oidc_secret_ref}" == "headlamp-oidc" ]] || {
+        check_pending "variáveis OIDC do Headlamp estão ausentes ou divergentes."
+        return 1
+      }
+    secret_oidc="$(kube -n "${DASHBOARD_NAMESPACE}" get secret headlamp-oidc \
+      -o jsonpath='{.data.client-secret}' 2>/dev/null)"
+    local_oidc="$(printf '%s' "${HEADLAMP_OIDC_CLIENT_SECRET}" | base64 -w 0)"
+    [[ "${secret_oidc}" == "${local_oidc}" ]] || {
+      check_pending "Secret OIDC do Headlamp está ausente ou desatualizado."
+      return 1
+    }
+    if [[ -n "${OIDC_CA_FILE}" ]]; then
+      kube -n "${DASHBOARD_NAMESPACE}" get configmap headlamp-oidc-ca >/dev/null 2>&1 || {
+        check_pending "ConfigMap da CA privada do Keycloak está ausente."
+        return 1
+      }
+      [[ "$(kube -n "${DASHBOARD_NAMESPACE}" get configmap headlamp-oidc-ca \
+        -o jsonpath='{.data.keycloak-ca\.crt}' 2>/dev/null)" == "$(<"${OIDC_CA_FILE}")" ]] || {
+          check_pending "CA privada montada no Headlamp está desatualizada."
+          return 1
+        }
+    fi
+  elif [[ -n "${actual_oidc_client}" ]]; then
+    check_pending "Headlamp ainda possui configuração OIDC apesar de ENABLE_OIDC=false."
+    return 1
+  fi
   read -r desired_replicas ready_replicas < <(kube -n "${DASHBOARD_NAMESPACE}" get deployment headlamp \
     -o jsonpath='{.spec.replicas} {.status.readyReplicas}' 2>/dev/null)
   [[ "${desired_replicas}" == "1" && "${ready_replicas}" == "1" ]] || {
@@ -329,14 +396,95 @@ kube -n "${DASHBOARD_NAMESPACE}" create secret tls headlamp-tls \
   --key="${cert_dir}/tls.key" \
   --dry-run=client -o yaml | kube apply -f -
 
+if is_true "${ENABLE_OIDC}"; then
+  oidc_secret_file="$(mktemp)"
+  chmod 0600 "${oidc_secret_file}"
+  printf '%s' "${HEADLAMP_OIDC_CLIENT_SECRET}" >"${oidc_secret_file}"
+  kube -n "${DASHBOARD_NAMESPACE}" create secret generic headlamp-oidc \
+    --from-file=client-secret="${oidc_secret_file}" \
+    --dry-run=client -o yaml | kube apply -f -
+  if [[ -n "${OIDC_CA_FILE}" ]]; then
+    kube -n "${DASHBOARD_NAMESPACE}" create configmap headlamp-oidc-ca \
+      --from-file=keycloak-ca.crt="${OIDC_CA_FILE}" \
+      --dry-run=client -o yaml | kube apply -f -
+  else
+    kube -n "${DASHBOARD_NAMESPACE}" delete configmap headlamp-oidc-ca \
+      --ignore-not-found=true >/dev/null
+  fi
+else
+  kube -n "${DASHBOARD_NAMESPACE}" delete secret headlamp-oidc \
+    --ignore-not-found=true >/dev/null
+  kube -n "${DASHBOARD_NAMESPACE}" delete configmap headlamp-oidc-ca \
+    --ignore-not-found=true >/dev/null
+fi
+
 rendered_manifest="$(mktemp)"
+base_manifest="$(mktemp)"
+oidc_env_fragment="$(mktemp)"
+oidc_volume_mount_fragment="$(mktemp)"
+oidc_volume_fragment="$(mktemp)"
 checksum="$(tls_checksum)"
+oidc_config_checksum="$(oidc_checksum)"
 sed \
   -e "s|__NAMESPACE__|${DASHBOARD_NAMESPACE}|g" \
   -e "s|__NODE_PORT__|${DASHBOARD_NODE_PORT}|g" \
   -e "s|__HEADLAMP_IMAGE__|${HEADLAMP_IMAGE}|g" \
   -e "s|__TLS_CHECKSUM__|${checksum}|g" \
-  "${PROJECT_DIR}/manifests/dashboard/headlamp.yaml" >"${rendered_manifest}"
+  -e "s|__OIDC_CHECKSUM__|${oidc_config_checksum}|g" \
+  "${PROJECT_DIR}/manifests/dashboard/headlamp.yaml" >"${base_manifest}"
+
+if is_true "${ENABLE_OIDC}"; then
+  cat >"${oidc_env_fragment}" <<EOF
+          env:
+            - name: HEADLAMP_CONFIG_OIDC_CLIENT_ID
+              value: "${OIDC_CLIENT_ID}"
+            - name: HEADLAMP_CONFIG_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: headlamp-oidc
+                  key: client-secret
+            - name: HEADLAMP_CONFIG_OIDC_IDP_ISSUER_URL
+              value: "${OIDC_ISSUER_URL}"
+            - name: HEADLAMP_CONFIG_OIDC_SCOPES
+              value: "${HEADLAMP_OIDC_SCOPES}"
+EOF
+  if [[ -n "${OIDC_CA_FILE}" ]]; then
+    cat >"${oidc_volume_mount_fragment}" <<'EOF'
+            - name: oidc-ca
+              mountPath: /etc/ssl/certs/keycloak-ca.crt
+              subPath: keycloak-ca.crt
+              readOnly: true
+EOF
+    cat >"${oidc_volume_fragment}" <<'EOF'
+        - name: oidc-ca
+          configMap:
+            name: headlamp-oidc-ca
+            defaultMode: 0444
+EOF
+  fi
+fi
+
+awk \
+  -v env_file="${oidc_env_fragment}" \
+  -v mount_file="${oidc_volume_mount_fragment}" \
+  -v volume_file="${oidc_volume_fragment}" '
+    /__OIDC_ENV__/ {
+      while ((getline line < env_file) > 0) print line
+      close(env_file)
+      next
+    }
+    /__OIDC_VOLUME_MOUNT__/ {
+      while ((getline line < mount_file) > 0) print line
+      close(mount_file)
+      next
+    }
+    /__OIDC_VOLUME__/ {
+      while ((getline line < volume_file) > 0) print line
+      close(volume_file)
+      next
+    }
+    { print }
+  ' "${base_manifest}" >"${rendered_manifest}"
 
 if headlamp_workload_needs_recreation; then
   remove_headlamp_workload

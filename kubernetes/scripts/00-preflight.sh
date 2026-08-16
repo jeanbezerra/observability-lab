@@ -51,13 +51,52 @@ esac
 [[ "${DEFAULT_TOKEN_DURATION}" =~ ^[0-9]+(s|m|h)$ ]] || die "DEFAULT_TOKEN_DURATION deve usar s, m ou h (ex.: 8h)."
 [[ "${DASHBOARD_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)$ ]] || die "DASHBOARD_ROLLOUT_TIMEOUT deve usar s, m ou h (ex.: 10m)."
 
-for boolean_name in SINGLE_NODE CREATE_ADMIN_SERVICE_ACCOUNT ENABLE_UFW ALLOW_UNSUPPORTED_OS AUTO_REPAIR_PARTIAL_CLUSTER; do
+for boolean_name in SINGLE_NODE CREATE_ADMIN_SERVICE_ACCOUNT ENABLE_OIDC OIDC_ENABLE_ADMIN_GROUP ENABLE_UFW ALLOW_UNSUPPORTED_OS AUTO_REPAIR_PARTIAL_CLUSTER; do
   boolean_value="${!boolean_name}"
   case "${boolean_value,,}" in
     1|0|true|false|yes|no|sim|nao|on|off) ;;
     *) die "${boolean_name} precisa ser true ou false; recebido: ${boolean_value}." ;;
   esac
 done
+
+if is_true "${ENABLE_OIDC}"; then
+  kubernetes_minor_number="${KUBERNETES_MINOR#v1.}"
+  [[ "${kubernetes_minor_number}" =~ ^[0-9]+$ && "${kubernetes_minor_number}" -ge 34 ]] \
+    || die "ENABLE_OIDC exige Kubernetes v1.34+ para AuthenticationConfiguration v1."
+  [[ "${OIDC_ISSUER_URL}" =~ ^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?/realms/[A-Za-z0-9._-]+$ ]] \
+    || die "OIDC_ISSUER_URL deve ser uma URL HTTPS Keycloak sem barra final (ex.: https://idp:8443/realms/platform)."
+  [[ "${OIDC_CLIENT_ID}" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$ ]] \
+    || die "OIDC_CLIENT_ID inválido."
+  for group_name in "${OIDC_VIEWER_GROUP}" "${OIDC_ADMIN_GROUP}"; do
+    [[ "${group_name}" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$ ]] \
+      || die "nome de grupo OIDC inválido: ${group_name}."
+  done
+  [[ "${OIDC_USERNAME_PREFIX}" =~ ^[A-Za-z0-9._:-]+$ \
+    && "${OIDC_USERNAME_PREFIX}" != system:* ]] \
+    || die "OIDC_USERNAME_PREFIX não pode ficar vazio nem usar o prefixo reservado system:."
+  [[ "${OIDC_GROUPS_PREFIX}" =~ ^[A-Za-z0-9._:-]+$ \
+    && "${OIDC_GROUPS_PREFIX}" != system:* ]] \
+    || die "OIDC_GROUPS_PREFIX não pode ficar vazio nem usar o prefixo reservado system:."
+  [[ "${HEADLAMP_EXTERNAL_URL}" =~ ^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?/?$ ]] \
+    || die "HEADLAMP_EXTERNAL_URL deve ser uma origem HTTPS sem caminho."
+  [[ "${HEADLAMP_OIDC_SCOPES}" =~ ^[A-Za-z0-9._:-]+(,[A-Za-z0-9._:-]+)*$ \
+    && ",${HEADLAMP_OIDC_SCOPES}," == *,openid,* ]] \
+    || die "HEADLAMP_OIDC_SCOPES deve ser uma lista separada por vírgulas contendo openid."
+  (( ${#HEADLAMP_OIDC_CLIENT_SECRET} >= 32 )) \
+    || die "HEADLAMP_OIDC_CLIENT_SECRET precisa ter ao menos 32 caracteres."
+  [[ "${HEADLAMP_OIDC_CLIENT_SECRET}" != "SUBSTITUA_"* ]] \
+    || die "substitua o placeholder de HEADLAMP_OIDC_CLIENT_SECRET."
+  [[ -n "${K8S_SECRETS_FILE:-}" && -r "${K8S_SECRETS_FILE}" ]] \
+    || die "ENABLE_OIDC=true exige oidc-secrets.env como segundo argumento."
+  secrets_mode="$(stat -c '%a' "${K8S_SECRETS_FILE}")"
+  (( 8#${secrets_mode} & 077 == 0 )) \
+    || die "${K8S_SECRETS_FILE} está acessível por grupo/outros (modo ${secrets_mode}); execute chmod 600."
+  if [[ -n "${OIDC_CA_FILE}" ]]; then
+    [[ -r "${OIDC_CA_FILE}" ]] || die "OIDC_CA_FILE não pode ser lido: ${OIDC_CA_FILE}."
+    grep -Fq -- '-----BEGIN CERTIFICATE-----' "${OIDC_CA_FILE}" \
+      || die "OIDC_CA_FILE não parece conter certificados PEM."
+  fi
+fi
 
 if [[ -n "${NODE_IP}" ]]; then
   valid_ipv4 "${NODE_IP}" || die "NODE_IP inválido."

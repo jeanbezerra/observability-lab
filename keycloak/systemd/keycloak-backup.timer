@@ -1,0 +1,12 @@
+[Unit]
+Description=Agenda o backup lógico diário do Keycloak
+
+[Timer]
+OnCalendar=__ON_CALENDAR__
+Persistent=true
+RandomizedDelaySec=5m
+Unit=keycloak-backup.service
+
+[Install]
+WantedBy=timers.target
+

@@ -31,6 +31,7 @@ spec:
         app.kubernetes.io/name: headlamp
       annotations:
         bootstrap.k8s.io/tls-checksum: __TLS_CHECKSUM__
+        bootstrap.k8s.io/oidc-checksum: __OIDC_CHECKSUM__
     spec:
       serviceAccountName: headlamp
       automountServiceAccountToken: true
@@ -52,6 +53,7 @@ spec:
             - -watch-plugins-changes=false
             - -tls-cert-path=/var/run/headlamp-tls/tls.crt
             - -tls-key-path=/var/run/headlamp-tls/tls.key
+          __OIDC_ENV__
           ports:
             - name: https
               containerPort: 4466
@@ -106,6 +108,7 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+          __OIDC_VOLUME_MOUNT__
       volumes:
         - name: tls
           secret:
@@ -114,6 +117,7 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+      __OIDC_VOLUME__
       terminationGracePeriodSeconds: 10
 ---
 apiVersion: v1

@@ -1,0 +1,6 @@
+keycloak.env
+secrets.env
+*.log
+*.tar.gz
+backups/
+

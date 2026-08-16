@@ -19,6 +19,23 @@ render_and_apply() {
   rm -f -- "${rendered}"
 }
 
+render_oidc_manifest() {
+  local source_file="$1"
+  sed \
+    -e "s|__OIDC_GROUPS_PREFIX__|${OIDC_GROUPS_PREFIX}|g" \
+    -e "s|__OIDC_VIEWER_GROUP__|${OIDC_VIEWER_GROUP}|g" \
+    -e "s|__OIDC_ADMIN_GROUP__|${OIDC_ADMIN_GROUP}|g" \
+    "${source_file}"
+}
+
+render_oidc_and_apply() {
+  local source_file="$1" rendered
+  rendered="$(mktemp)"
+  render_oidc_manifest "${source_file}" >"${rendered}"
+  kube apply -f "${rendered}"
+  rm -f -- "${rendered}"
+}
+
 render_dashboard_env() {
   printf 'DASHBOARD_NAMESPACE=%q\n' "${DASHBOARD_NAMESPACE}"
   printf 'DEFAULT_TOKEN_DURATION=%q\n' "${DEFAULT_TOKEN_DURATION}"
@@ -57,6 +74,41 @@ rbac_state_ok() {
     check_pending "dashboard-viewer não referencia o ClusterRole view."
     return 1
   }
+
+  if is_true "${ENABLE_OIDC}"; then
+    if ! render_oidc_manifest "${PROJECT_DIR}/manifests/dashboard/rbac-oidc-viewer.yaml" \
+      | kube diff -f - >/dev/null 2>&1; then
+      check_pending "vínculos RBAC do grupo OIDC de leitura diferem do desejado."
+      return 1
+    fi
+    binding_subject="$(kube get clusterrolebinding headlamp-oidc-viewer \
+      -o jsonpath='{.subjects[?(@.kind=="Group")].name}' 2>/dev/null)"
+    [[ "${binding_subject}" == "${OIDC_GROUPS_PREFIX}${OIDC_VIEWER_GROUP}" ]] || {
+      check_pending "grupo OIDC de leitura aponta para outro subject."
+      return 1
+    }
+    if is_true "${OIDC_ENABLE_ADMIN_GROUP}"; then
+      if ! render_oidc_manifest "${PROJECT_DIR}/manifests/dashboard/rbac-oidc-admin.yaml" \
+        | kube diff -f - >/dev/null 2>&1; then
+        check_pending "vínculo RBAC do grupo OIDC administrativo difere do desejado."
+        return 1
+      fi
+      binding_subject="$(kube get clusterrolebinding headlamp-oidc-admin \
+        -o jsonpath='{.subjects[?(@.kind=="Group")].name}' 2>/dev/null)"
+      [[ "${binding_subject}" == "${OIDC_GROUPS_PREFIX}${OIDC_ADMIN_GROUP}" ]] || {
+        check_pending "grupo OIDC administrativo aponta para outro subject."
+        return 1
+      }
+    elif kube get clusterrolebinding headlamp-oidc-admin >/dev/null 2>&1; then
+      check_pending "vínculo OIDC administrativo existe apesar de OIDC_ENABLE_ADMIN_GROUP=false."
+      return 1
+    fi
+  elif kube get clusterrolebinding headlamp-oidc-viewer >/dev/null 2>&1 \
+    || kube get clusterrolebinding headlamp-oidc-cluster-observer >/dev/null 2>&1 \
+    || kube get clusterrolebinding headlamp-oidc-admin >/dev/null 2>&1; then
+    check_pending "vínculos OIDC ainda existem apesar de ENABLE_OIDC=false."
+    return 1
+  fi
 
   if is_true "${CREATE_ADMIN_SERVICE_ACCOUNT}"; then
     if ! sed "s|__NAMESPACE__|${DASHBOARD_NAMESPACE}|g" \
@@ -113,6 +165,21 @@ fi
 
 log "Reconciliando identidade de leitura do Dashboard."
 render_and_apply "${PROJECT_DIR}/manifests/dashboard/rbac-viewer.yaml"
+
+if is_true "${ENABLE_OIDC}"; then
+  log "Vinculando o grupo ${OIDC_GROUPS_PREFIX}${OIDC_VIEWER_GROUP} aos perfis de leitura."
+  render_oidc_and_apply "${PROJECT_DIR}/manifests/dashboard/rbac-oidc-viewer.yaml"
+  if is_true "${OIDC_ENABLE_ADMIN_GROUP}"; then
+    warn "Vinculando ${OIDC_GROUPS_PREFIX}${OIDC_ADMIN_GROUP} ao ClusterRole cluster-admin. A associação de usuários a esse grupo deve ser restrita e auditada no Keycloak."
+    render_oidc_and_apply "${PROJECT_DIR}/manifests/dashboard/rbac-oidc-admin.yaml"
+  else
+    kube delete clusterrolebinding headlamp-oidc-admin --ignore-not-found=true
+  fi
+else
+  log "Removendo somente os vínculos de grupos OIDC gerenciados, pois ENABLE_OIDC=false."
+  kube delete clusterrolebinding headlamp-oidc-viewer headlamp-oidc-cluster-observer \
+    headlamp-oidc-admin --ignore-not-found=true
+fi
 
 if is_true "${CREATE_ADMIN_SERVICE_ACCOUNT}"; then
   warn "Reconciliando dashboard-admin com privilégios cluster-admin; emita tokens apenas quando necessário."

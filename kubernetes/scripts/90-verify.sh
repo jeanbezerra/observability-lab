@@ -5,6 +5,7 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 require_root
 require_command curl
+require_command jq
 
 log "Verificando serviços systemd."
 systemctl is-enabled --quiet containerd || die "containerd não está habilitado no boot."
@@ -38,6 +39,32 @@ if is_true "${CREATE_ADMIN_SERVICE_ACCOUNT}"; then
     || die "dashboard-admin não recebeu as permissões administrativas esperadas."
 fi
 
+if is_true "${ENABLE_OIDC}"; then
+  log "Verificando autenticação estruturada, discovery e RBAC dos grupos OIDC."
+  "${PROJECT_DIR}/scripts/55-configure-oidc.sh" --check \
+    || die "configuração OIDC do API Server diverge do esperado."
+  curl_args=(--fail --silent --show-error --connect-timeout 5 --max-time 20)
+  [[ -z "${OIDC_CA_FILE}" ]] || curl_args+=(--cacert "${OIDC_CA_FILE}")
+  discovery="$(curl "${curl_args[@]}" "${OIDC_ISSUER_URL}/.well-known/openid-configuration")"
+  jq -e --arg issuer "${OIDC_ISSUER_URL}" '.issuer == $issuer' <<<"${discovery}" >/dev/null \
+    || die "discovery OIDC retornou outro issuer."
+  kube auth can-i list pods --all-namespaces \
+    --as="${OIDC_USERNAME_PREFIX}validation-user" \
+    --as-group="${OIDC_GROUPS_PREFIX}${OIDC_VIEWER_GROUP}" --quiet \
+    || die "grupo OIDC de leitura não consegue listar Pods."
+  if kube auth can-i get secrets --all-namespaces \
+    --as="${OIDC_USERNAME_PREFIX}validation-user" \
+    --as-group="${OIDC_GROUPS_PREFIX}${OIDC_VIEWER_GROUP}" --quiet; then
+    die "grupo OIDC de leitura recebeu acesso indevido a Secrets."
+  fi
+  if is_true "${OIDC_ENABLE_ADMIN_GROUP}"; then
+    kube auth can-i '*' '*' --all-namespaces \
+      --as="${OIDC_USERNAME_PREFIX}validation-admin" \
+      --as-group="${OIDC_GROUPS_PREFIX}${OIDC_ADMIN_GROUP}" --quiet \
+      || die "grupo OIDC administrativo não recebeu cluster-admin."
+  fi
+fi
+
 node_ip="$(detect_node_ip)"
 retry 12 5 curl -fsS --cacert /etc/kubernetes/pki/headlamp/ca.crt \
   --connect-timeout 5 "https://${node_ip}:${DASHBOARD_NODE_PORT}/" -o /dev/null \
@@ -49,11 +76,16 @@ if is_true "${CREATE_ADMIN_SERVICE_ACCOUNT}"; then
 else
   admin_token_hint="desativado por CREATE_ADMIN_SERVICE_ACCOUNT=false"
 fi
+if is_true "${ENABLE_OIDC}"; then
+  login_hint="OIDC: botão Sign in (${OIDC_ISSUER_URL})"
+else
+  login_hint="Token leitura: sudo k8s-dashboard-token viewer ${DEFAULT_TOKEN_DURATION}"
+fi
 cat <<EOF
 
 Cluster validado com sucesso.
   Dashboard: https://${access_host}:${DASHBOARD_NODE_PORT}/?lng=${DASHBOARD_DEFAULT_LANGUAGE}
-  Token leitura: sudo k8s-dashboard-token viewer ${DEFAULT_TOKEN_DURATION}
+  Login:         ${login_hint}
   Token admin:   ${admin_token_hint}
   CA local:      /etc/kubernetes/pki/headlamp/ca.crt
 

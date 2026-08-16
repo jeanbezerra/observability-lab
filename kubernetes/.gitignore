@@ -1,4 +1,4 @@
 cluster.env
+oidc-secrets.env
 *.token
 *.log
-

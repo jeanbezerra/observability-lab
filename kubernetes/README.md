@@ -2,7 +2,7 @@
 
 Este diretório instala, com um único comando, um cluster Kubernetes de nó único no Ubuntu Server 26.04 LTS. A automação prepara o sistema operacional, instala `containerd`, `kubeadm`, `kubelet` e `kubectl`, inicializa o control plane, instala a rede Flannel e publica um Dashboard HTTPS permanente na porta TCP `30443`.
 
-> **Importante:** o projeto chamado **Kubernetes Dashboard** foi arquivado e está sem manutenção desde 2026. A própria documentação do Kubernetes recomenda o **Headlamp** para novas instalações. Por isso, este projeto usa o Headlamp como Dashboard Web, com login por token e autorização via RBAC. Consulte a [documentação oficial do Kubernetes](https://kubernetes.io/docs/tasks/access-application-cluster/web-ui-dashboard/) e o [projeto Headlamp](https://headlamp.dev/).
+> **Importante:** o projeto chamado **Kubernetes Dashboard** foi arquivado e está sem manutenção desde 2026. A própria documentação do Kubernetes recomenda o **Headlamp** para novas instalações. Por isso, este projeto usa o Headlamp como Dashboard Web, com login OIDC pelo Keycloak (ou token de contingência) e autorização via RBAC. Consulte a [documentação oficial do Kubernetes](https://kubernetes.io/docs/tasks/access-application-cluster/web-ui-dashboard/) e o [projeto Headlamp](https://headlamp.dev/).
 
 ## O que é instalado
 
@@ -11,11 +11,13 @@ Este diretório instala, com um único comando, um cluster Kubernetes de nó ún
 - `cri-tools`/`crictl`, configurado para o socket do containerd;
 - Flannel `v0.28.4` como CNI, com download validado por SHA-256;
 - Headlamp `v0.43.0`, executado como `Deployment` e reiniciado automaticamente;
+- autenticação OIDC estruturada do API Server, com Keycloak, ID token e grupos;
 - serviço `NodePort` HTTPS fixo em `30443`;
 - certificado e autoridade certificadora locais, gerados automaticamente;
 - usuário Linux operacional e kubeconfig protegido;
 - kubeconfig administrativo protegido também em `/root/.kube/config`;
-- identidades Kubernetes `dashboard-viewer` e, opcionalmente, `dashboard-admin`;
+- grupos federados `oidc:k8s-viewers` e `oidc:k8s-admins` ligados ao RBAC;
+- identidades de contingência `dashboard-viewer` e, opcionalmente, `dashboard-admin`;
 - UFW instalado automaticamente, com SSH preservado e acesso remoto ao Dashboard;
 - utilitário `/usr/local/sbin/k8s-dashboard-token` para tokens temporários;
 - validação final do nó, CNI, DNS, RBAC, TLS e endpoint HTTPS do nó.
@@ -34,7 +36,7 @@ firewall/NAT/security group
      v
 Ubuntu 26.04 ── NodePort 30443 ── Headlamp Pod
      |                                  |
-     | containerd + kubelet             | token temporário
+     | containerd + kubelet             | ID token OIDC (ou token de contingência)
      v                                  v
 control plane Kubernetes <──────────── RBAC
 ```
@@ -68,8 +70,10 @@ Entre na pasta no servidor Ubuntu:
 ```bash
 cd kubernetes
 cp .env.example cluster.env
-chmod 600 cluster.env
+cp .oidc-secrets.env.example oidc-secrets.env
+chmod 600 cluster.env oidc-secrets.env
 nano cluster.env
+nano oidc-secrets.env
 ```
 
 Para acesso remoto, revise pelo menos estas variáveis:
@@ -93,7 +97,7 @@ SSH_PORT="22"
 Execute toda a instalação:
 
 ```bash
-sudo bash install-all.sh cluster.env
+sudo bash install-all.sh cluster.env oidc-secrets.env
 ```
 
 Os scripts são reconciliadores e podem ser executados quantas vezes forem necessárias. Antes de cada etapa, `install-all.sh` chama o modo somente leitura `--check`: se o estado real estiver correto, a etapa é ignorada; se algo estiver ausente, desatualizado ou incompatível, somente essa etapa é executada e validada novamente. Checkpoints informativos ficam em `/var/lib/k8s-bootstrap/steps`, mas nunca substituem a inspeção do estado real.
@@ -186,7 +190,20 @@ Reabra o navegador depois da importação. Não copie `ca.key` nem `tls.key` par
 
 ## Login e usuários
 
-O Headlamp pede um Bearer Token. Gere tokens somente quando for usar o Dashboard; eles não ficam gravados em arquivos.
+Com `ENABLE_OIDC=true`, o Headlamp mostra o botão **Sign in** e redireciona o navegador ao Keycloak. O cliente configurado no IdP precisa usar o mesmo `OIDC_CLIENT_ID`, secret, issuer e callback `${HEADLAMP_EXTERNAL_URL}/oidc-callback`.
+
+O API Server mapeia `preferred_username` para `oidc:<usuário>` e a claim array `groups` para grupos com prefixo `oidc:`. Os vínculos iniciais são:
+
+| Grupo Keycloak | Subject Kubernetes | Permissões |
+|---|---|---|
+| `k8s-viewers` | `oidc:k8s-viewers` | leitura de workloads e objetos de cluster úteis à UI, sem Secrets |
+| `k8s-admins` | `oidc:k8s-admins` | `cluster-admin`, somente quando `OIDC_ENABLE_ADMIN_GROUP=true` |
+
+Para TLS privado, copie a CA pública do Keycloak para o control plane e configure `OIDC_CA_FILE`. Essa mesma CA é incluída no `AuthenticationConfiguration` e montada no Headlamp; a chave privada da CA nunca vai para o cluster.
+
+### Tokens de contingência
+
+As ServiceAccounts permanecem como acesso de contingência. Gere tokens somente quando necessário; eles não ficam gravados em arquivos.
 
 Perfil recomendado, somente leitura:
 
@@ -208,7 +225,9 @@ Copie a saída e cole no campo de token do Headlamp. A duração aceita segundos
 | `k8s-operators` | grupo Linux | pode executar o emissor de token instalado com modo `0750` |
 | `headlamp` | ServiceAccount | executa a UI; não recebe ClusterRole administrativo |
 | `dashboard-viewer` | ServiceAccount | visualiza workloads e objetos do cluster, sem ler Secrets |
-| `dashboard-admin` | ServiceAccount | recebe `cluster-admin`; habilitado por padrão e deve ser usado com cautela |
+| `dashboard-admin` | ServiceAccount | recebe `cluster-admin`; desabilitado no exemplo OIDC e deve ser usado com cautela |
+| `oidc:k8s-viewers` | grupo federado | perfil normal de leitura do Headlamp |
+| `oidc:k8s-admins` | grupo federado | administração total quando explicitamente habilitada |
 
 Para não criar a identidade administrativa, configure antes da instalação:
 
@@ -216,7 +235,7 @@ Para não criar a identidade administrativa, configure antes da instalação:
 CREATE_ADMIN_SERVICE_ACCOUNT="false"
 ```
 
-O Kubernetes não cria “usuários com senha” internamente. As identidades do Dashboard são ServiceAccounts autenticadas por tokens temporários e autorizadas por RBAC, que é o mecanismo nativo para este cenário.
+O Kubernetes não cria “usuários com senha” internamente. O Keycloak autentica a pessoa, o API Server valida o ID token assinado e o Kubernetes RBAC autoriza os grupos. O kubeconfig administrativo em `/etc/kubernetes/admin.conf` continua disponível como acesso local de emergência.
 
 ## Segurança do acesso público
 
@@ -254,13 +273,24 @@ As opções estão documentadas em `.env.example`:
 | `DASHBOARD_CERT_DAYS` | `825` | validade do certificado do servidor |
 | `DASHBOARD_DEFAULT_LANGUAGE` | `en` | idioma incluído nos URLs gerados para o Headlamp |
 | `DASHBOARD_ROLLOUT_TIMEOUT` | `10m` | tempo máximo para baixar/iniciar o Headlamp |
-| `CREATE_ADMIN_SERVICE_ACCOUNT` | `true` | cria a identidade administrativa do Dashboard |
+| `CREATE_ADMIN_SERVICE_ACCOUNT` | `false` no exemplo | cria a identidade administrativa de contingência do Dashboard |
 | `DEFAULT_TOKEN_DURATION` | `8h` | duração padrão de um token novo |
+| `ENABLE_OIDC` | `true` no exemplo | ativa Keycloak no API Server e no Headlamp |
+| `OIDC_ISSUER_URL` | obrigatório | issuer exato `https://.../realms/...` |
+| `OIDC_CLIENT_ID` | `kubernetes` | audience aceita pelo API Server e cliente do Headlamp |
+| `OIDC_CA_FILE` | vazio | CA privada do Keycloak; vazio usa as CAs públicas do sistema |
+| `OIDC_USERNAME_PREFIX` | `oidc:` | prefixo de usuários federados no Kubernetes |
+| `OIDC_GROUPS_PREFIX` | `oidc:` | prefixo de grupos federados no Kubernetes |
+| `OIDC_VIEWER_GROUP` | `k8s-viewers` | grupo ligado aos perfis de leitura |
+| `OIDC_ADMIN_GROUP` | `k8s-admins` | grupo administrativo opcional |
+| `OIDC_ENABLE_ADMIN_GROUP` | `true` | liga o grupo administrativo ao `cluster-admin` |
+| `HEADLAMP_EXTERNAL_URL` | obrigatório | origem HTTPS usada no callback OIDC |
+| `HEADLAMP_OIDC_SCOPES` | `openid,profile,email` | scopes solicitados ao Keycloak |
 | `ENABLE_UFW` | `true` | configura e ativa UFW |
 | `SSH_PORT` | `22` | porta liberada antes da ativação do UFW |
 | `AUTO_REPAIR_PARTIAL_CLUSTER` | `true` | repara somente resíduos de bootstrap sem `admin.conf` |
 
-`cluster.env` é carregado como configuração Bash e deve ser editado somente por administradores. Ele está ignorado por `.gitignore` e deve permanecer com modo `0600`.
+`cluster.env` e `oidc-secrets.env` são carregados como configuração Bash e devem ser editados somente por administradores. Ambos estão ignorados pelo Git e devem permanecer com modo `0600`. `HEADLAMP_OIDC_CLIENT_SECRET` precisa ser idêntico ao secret do cliente no Keycloak.
 
 ## Scripts segmentados
 
@@ -272,6 +302,7 @@ As opções estão documentadas em `.env.example`:
 | 30 | `30-install-kubernetes.sh` | configura o APT oficial e instala kubelet/kubeadm/kubectl/crictl |
 | 40 | `40-bootstrap-cluster.sh` | executa `kubeadm init`, instala kubeconfig e configura nó único |
 | 50 | `50-install-network.sh` | valida e aplica o manifesto Flannel |
+| 55 | `55-configure-oidc.sh` | configura `AuthenticationConfiguration`, CA, backup e rollback do API Server |
 | 60 | `60-install-dashboard.sh` | emite TLS, instala Headlamp e cria o NodePort persistente |
 | 70 | `70-configure-firewall.sh` | instala o UFW se necessário, preserva SSH, libera CNI e abre o Dashboard |
 | 80 | `80-create-users.sh` | aplica RBAC e instala o emissor de tokens |
@@ -281,6 +312,7 @@ Para reexecutar apenas uma etapa usando a configuração:
 
 ```bash
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
+  K8S_SECRETS_FILE="$(realpath oidc-secrets.env)" \
   bash scripts/60-install-dashboard.sh
 ```
 
@@ -288,6 +320,7 @@ Para apenas inspecionar uma etapa, sem alterar o host ou o cluster:
 
 ```bash
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
+  K8S_SECRETS_FILE="$(realpath oidc-secrets.env)" \
   bash scripts/60-install-dashboard.sh --check
 ```
 
@@ -345,6 +378,7 @@ Verificação completa:
 
 ```bash
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
+  K8S_SECRETS_FILE="$(realpath oidc-secrets.env)" \
   bash scripts/90-verify.sh
 ```
 
@@ -354,7 +388,7 @@ Após reiniciar o servidor, aguarde de um a três minutos e confirme que o nó v
 
 ### O navegador não conecta
 
-1. Rode `sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" bash scripts/90-verify.sh` no servidor.
+1. Rode `sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" K8S_SECRETS_FILE="$(realpath oidc-secrets.env)" bash scripts/90-verify.sh` no servidor.
 2. Confira `sudo ufw status` e `kubectl -n kubernetes-dashboard get svc headlamp`.
 3. Teste localmente: `curl --cacert /etc/kubernetes/pki/headlamp/ca.crt https://NODE_IP:30443/`.
 4. Teste TCP externamente: `nc -vz IP_PUBLICO 30443`.
@@ -390,6 +424,7 @@ Reexecute somente essa etapa:
 
 ```bash
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
+  K8S_SECRETS_FILE="$(realpath oidc-secrets.env)" \
   bash scripts/60-install-dashboard.sh
 ```
 
@@ -405,6 +440,7 @@ Como último recurso, se o recurso gerenciado continuar inconsistente mesmo apó
 ```bash
 kubectl -n kubernetes-dashboard delete deployment headlamp
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
+  K8S_SECRETS_FILE="$(realpath oidc-secrets.env)" \
   bash scripts/60-install-dashboard.sh
 ```
 
@@ -437,4 +473,5 @@ Se o evento também mencionar `/run/flannel/subnet.env`, a etapa 50 agora detect
 - [Criação de cluster com kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/)
 - [Flannel](https://github.com/flannel-io/flannel)
 - [Headlamp in-cluster](https://headlamp.dev/docs/latest/installation/in-cluster/)
-- [Autenticação do Headlamp](https://headlamp.dev/docs/latest/installation/)
+- [OIDC no Headlamp](https://headlamp.dev/docs/latest/installation/in-cluster/oidc/)
+- [Autenticação OIDC estruturada do Kubernetes](https://kubernetes.io/docs/reference/access-authn-authz/authentication/)
