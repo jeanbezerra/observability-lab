@@ -17,6 +17,13 @@ if /i "%~1"=="--help" goto :help
 set "PORT=%~1"
 if not defined PORT set "PORT=30443"
 
+set "INVALID_PORT="
+for /f "delims=0123456789" %%A in ("%PORT%") do set "INVALID_PORT=1"
+if defined INVALID_PORT (
+  echo ERRO: PORTA deve conter somente numeros.
+  exit /b 2
+)
+
 where.exe curl.exe >nul 2>&1
 if errorlevel 1 goto :open_browser
 

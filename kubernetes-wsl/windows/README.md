@@ -220,6 +220,8 @@ Todos os `.cmd` aceitam `/?` ou `--help`:
 
 Código `0` indica que a ação ou verificação principal terminou. Código diferente de `0` indica que nenhuma confirmação segura pôde ser obtida; leia a mensagem antes de repetir o comando.
 
+Por segurança, `DISTRIBUICAO` aceita somente letras, números, ponto, sublinhado e hífen; nomes com espaços não são aceitos. `PORTA` aceita somente dígitos. Esses limites evitam que parâmetros sejam interpretados como comandos pelo CMD.
+
 ## Diagnóstico
 
 Estado geral:

@@ -25,6 +25,19 @@ set "PORT=%~2"
 if not defined PORT set "PORT=30443"
 set "SERVICE=k8s-headlamp-local.service"
 
+set "INVALID_DISTRO="
+for /f "delims=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" %%A in ("%DISTRO%") do set "INVALID_DISTRO=1"
+if defined INVALID_DISTRO (
+  echo ERRO: DISTRIBUICAO aceita somente letras, numeros, ponto, sublinhado e hifen.
+  exit /b 2
+)
+set "INVALID_PORT="
+for /f "delims=0123456789" %%A in ("%PORT%") do set "INVALID_PORT=1"
+if defined INVALID_PORT (
+  echo ERRO: PORTA deve conter somente numeros.
+  exit /b 2
+)
+
 where.exe wsl.exe >nul 2>&1
 if errorlevel 1 (
   echo ERRO: wsl.exe nao foi encontrado.
@@ -32,23 +45,23 @@ if errorlevel 1 (
 )
 
 echo Verificando o servico "%SERVICE%" em "%DISTRO%"...
-wsl.exe -d "%DISTRO%" --user root -- systemctl cat --no-pager "%SERVICE%" >nul 2>&1
-if errorlevel 1 (
+wsl.exe -d %DISTRO% --user root -- systemctl cat --no-pager %SERVICE% >nul 2>&1
+if not "%ERRORLEVEL%"=="0" (
   echo ERRO: o servico de encaminhamento nao foi instalado.
   echo Execute install-all.sh dentro do Ubuntu e tente novamente.
   exit /b 1
 )
 
 echo Habilitando o encaminhamento local persistente...
-wsl.exe -d "%DISTRO%" --user root -- systemctl enable --now "%SERVICE%"
-if errorlevel 1 (
+wsl.exe -d %DISTRO% --user root -- systemctl enable --now %SERVICE%
+if not "%ERRORLEVEL%"=="0" (
   echo ERRO: systemd nao conseguiu habilitar ou iniciar "%SERVICE%".
-  echo Consulte: wsl.exe -d "%DISTRO%" --user root -- journalctl -u "%SERVICE%" -n 100 --no-pager
+  echo Consulte: wsl.exe -d %DISTRO% --user root -- journalctl -u "%SERVICE%" -n 100 --no-pager
   exit /b 1
 )
 
-wsl.exe -d "%DISTRO%" --user root -- systemctl is-active --quiet "%SERVICE%"
-if errorlevel 1 (
+wsl.exe -d %DISTRO% --user root -- systemctl is-active --quiet %SERVICE%
+if not "%ERRORLEVEL%"=="0" (
   echo ERRO: o servico foi acionado, mas nao permaneceu ativo.
   exit /b 1
 )
@@ -64,7 +77,7 @@ echo Aguardando https://localhost:%PORT% responder...
 for /l %%I in (1,1,15) do (
   curl.exe --insecure --silent --output NUL --connect-timeout 1 --max-time 3 "https://localhost:%PORT%/"
   if not errorlevel 1 goto :ready
-  timeout.exe /t 1 /nobreak >nul
+  ping.exe -n 2 127.0.0.1 >nul
 )
 
 echo ERRO: o servico esta ativo, mas localhost:%PORT% nao respondeu.

@@ -12,12 +12,31 @@ rem Uso: 30-trust-headlamp-ca.cmd [DISTRIBUICAO]
 rem Ex.: 30-trust-headlamp-ca.cmd Ubuntu-26.04
 rem =============================================================================
 
-if /i "%~1"=="/?" goto :help
-if /i "%~1"=="--help" goto :help
+if /i "%~1"=="/?" (
+  echo Uso: %~nx0 [DISTRIBUICAO]
+  echo.
+  echo Importa somente a CA publica para o repositorio do usuario atual.
+  echo Padrao: DISTRIBUICAO=Ubuntu-26.04.
+  exit /b 0
+)
+if /i "%~1"=="--help" (
+  echo Uso: %~nx0 [DISTRIBUICAO]
+  echo.
+  echo Importa somente a CA publica para o repositorio do usuario atual.
+  echo Padrao: DISTRIBUICAO=Ubuntu-26.04.
+  exit /b 0
+)
 
 set "DISTRO=%~1"
 if not defined DISTRO set "DISTRO=Ubuntu-26.04"
 set "CERT_FILE=%TEMP%\kubernetes-wsl-headlamp-%RANDOM%.crt"
+
+set "INVALID_DISTRO="
+for /f "delims=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" %%A in ("%DISTRO%") do set "INVALID_DISTRO=1"
+if defined INVALID_DISTRO (
+  echo ERRO: DISTRIBUICAO aceita somente letras, numeros, ponto, sublinhado e hifen.
+  exit /b 2
+)
 
 where.exe wsl.exe >nul 2>&1
 if errorlevel 1 (
@@ -31,8 +50,8 @@ if errorlevel 1 (
 )
 
 echo Copiando a CA publica do Headlamp a partir de "%DISTRO%"...
-wsl.exe -d "%DISTRO%" --user root -- cat /etc/kubernetes/pki/headlamp/ca.crt > "%CERT_FILE%"
-if errorlevel 1 goto :copy_error
+wsl.exe -d %DISTRO% --user root -- cat /etc/kubernetes/pki/headlamp/ca.crt > "%CERT_FILE%"
+if not "%ERRORLEVEL%"=="0" goto :copy_error
 
 findstr.exe /c:"-----BEGIN CERTIFICATE-----" "%CERT_FILE%" >nul
 if errorlevel 1 goto :copy_error
@@ -56,9 +75,3 @@ del /q "%CERT_FILE%" >nul 2>&1
 echo ERRO: certutil nao conseguiu instalar a CA no repositorio do usuario atual.
 exit /b 1
 
-:help
-echo Uso: %~nx0 [DISTRIBUICAO]
-echo.
-echo Importa somente a CA publica para o repositorio do usuario atual.
-echo Padrao: DISTRIBUICAO=Ubuntu-26.04.
-exit /b 0

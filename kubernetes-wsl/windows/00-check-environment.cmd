@@ -21,51 +21,59 @@ set "PORT=%~2"
 if not defined PORT set "PORT=30443"
 set "SERVICE=k8s-headlamp-local.service"
 
+set "INVALID_DISTRO="
+for /f "delims=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" %%A in ("%DISTRO%") do set "INVALID_DISTRO=1"
+if defined INVALID_DISTRO (
+  echo ERRO: DISTRIBUICAO aceita somente letras, numeros, ponto, sublinhado e hifen.
+  exit /b 2
+)
+set "INVALID_PORT="
+for /f "delims=0123456789" %%A in ("%PORT%") do set "INVALID_PORT=1"
+if defined INVALID_PORT (
+  echo ERRO: PORTA deve conter somente numeros.
+  exit /b 2
+)
+
 where.exe wsl.exe >nul 2>&1
 if errorlevel 1 (
   echo ERRO: wsl.exe nao foi encontrado. Solicite a habilitacao do WSL 2 a TI.
   exit /b 1
 )
 
-rem Mantem a distribuicao viva por alguns segundos durante as consultas. Isso
-rem evita uma corrida do WSL quando ainda nao existem servicos persistentes.
-start "" /b wsl.exe -d "%DISTRO%" --user root -- sleep 15 >nul 2>&1
-choice.exe /c Y /n /d Y /t 1 >nul
-
 echo [1/5] Verificando a distribuicao "%DISTRO%"...
-wsl.exe -d "%DISTRO%" --user root -- test -r /etc/os-release >nul 2>&1
-if errorlevel 1 (
+wsl.exe -d %DISTRO% --user root -- test -r /etc/os-release >nul 2>&1
+if not "%ERRORLEVEL%"=="0" (
   echo ERRO: a distribuicao "%DISTRO%" nao existe ou nao pode ser iniciada.
   echo Confira os nomes com: wsl.exe --list --verbose
   exit /b 1
 )
 
 echo [2/5] Verificando se "%DISTRO%" usa WSL 2...
-wsl.exe -d "%DISTRO%" --user root -- grep -qi "WSL2" /proc/sys/kernel/osrelease
-if errorlevel 1 (
+wsl.exe -d %DISTRO% --user root -- grep -qi "WSL2" /proc/sys/kernel/osrelease
+if not "%ERRORLEVEL%"=="0" (
   echo ERRO: "%DISTRO%" nao foi identificada como WSL 2.
   echo Confira com: wsl.exe --list --verbose
   exit /b 1
 )
 
 echo [3/5] Verificando systemd como PID 1 em "%DISTRO%"...
-wsl.exe -d "%DISTRO%" --user root -- grep -qxi "systemd" /proc/1/comm
-if errorlevel 1 (
+wsl.exe -d %DISTRO% --user root -- grep -qxi "systemd" /proc/1/comm
+if not "%ERRORLEVEL%"=="0" (
   echo ERRO: systemd nao esta ativo como PID 1 em "%DISTRO%".
   echo Execute prepare-wsl.sh e depois 10-restart-wsl.cmd.
   exit /b 1
 )
 
 echo [4/5] Verificando o servico de encaminhamento local em "%DISTRO%"...
-wsl.exe -d "%DISTRO%" --user root -- systemctl cat --no-pager "%SERVICE%" >nul 2>&1
-if errorlevel 1 (
+wsl.exe -d %DISTRO% --user root -- systemctl cat --no-pager %SERVICE% >nul 2>&1
+if not "%ERRORLEVEL%"=="0" (
   echo ERRO: o servico "%SERVICE%" ainda nao foi instalado.
   echo Conclua install-all.sh dentro do Ubuntu antes de abrir a porta.
   exit /b 1
 )
 
-wsl.exe -d "%DISTRO%" --user root -- systemctl is-active --quiet "%SERVICE%"
-if errorlevel 1 (
+wsl.exe -d %DISTRO% --user root -- systemctl is-active --quiet %SERVICE%
+if not "%ERRORLEVEL%"=="0" (
   echo INFO: encaminhamento fechado. Use 20-open-cluster-ports.cmd para abri-lo.
 ) else (
   echo OK: o servico de encaminhamento esta ativo no WSL.
