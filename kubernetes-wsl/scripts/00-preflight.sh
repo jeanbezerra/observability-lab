@@ -126,7 +126,8 @@ for timeout_name in CLUSTER_OPERATION_TIMEOUT KUBEADM_INIT_TIMEOUT; do
     || die "${timeout_name} deve usar s, m ou h (ex.: 20m)."
 done
 for seconds_name in KUBERNETES_REQUEST_TIMEOUT_SECONDS ARTIFACT_CONNECT_TIMEOUT_SECONDS \
-  ARTIFACT_RETRY_ATTEMPTS ARTIFACT_RETRY_DELAY_SECONDS; do
+  ARTIFACT_RETRY_ATTEMPTS ARTIFACT_RETRY_DELAY_SECONDS \
+  DIAGNOSTIC_CHECK_TIMEOUT_SECONDS DIAGNOSTIC_TAIL_LINES; do
   seconds_value="${!seconds_name}"
   [[ "${seconds_value}" =~ ^[1-9][0-9]*$ ]] \
     || die "${seconds_name} deve ser um inteiro positivo; recebido: ${seconds_value}."
@@ -144,13 +145,17 @@ elif artifact_cache_compatible; then
   log "Cache de contingência compatível detectado em ${ARTIFACT_CACHE_DIR}."
 fi
 
-for boolean_name in SINGLE_NODE ALLOW_UNSUPPORTED_OS ALLOW_LOW_RESOURCES AUTO_REPAIR_PARTIAL_CLUSTER; do
+for boolean_name in SINGLE_NODE ALLOW_UNSUPPORTED_OS ALLOW_LOW_RESOURCES \
+  AUTO_REPAIR_PARTIAL_CLUSTER DIAGNOSTIC_ON_ERROR; do
   boolean_value="${!boolean_name}"
   case "${boolean_value,,}" in
     1|0|true|false|yes|no|sim|nao|on|off) ;;
     *) die "${boolean_name} precisa ser true ou false; recebido: ${boolean_value}." ;;
   esac
 done
+
+[[ "${BOOTSTRAP_LOG_DIR}" == /* ]] \
+  || die "BOOTSTRAP_LOG_DIR precisa ser um caminho Linux absoluto."
 
 project_fs="$(findmnt -T "${PROJECT_DIR}" -n -o FSTYPE 2>/dev/null || true)"
 case "${project_fs}" in

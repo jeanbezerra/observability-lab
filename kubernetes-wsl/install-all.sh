@@ -24,13 +24,50 @@ fi
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT_DIR}/scripts/lib/common.sh"
 
+start_persistent_log deploy
+
+INSTALL_COMPLETED=false
+CURRENT_PHASE="startup"
+
+on_install_exit() {
+  local exit_code="$1"
+  trap - EXIT ERR
+  if is_true "${INSTALL_COMPLETED}"; then
+    log_event INFO installer success \
+      "run_id=${BOOTSTRAP_RUN_ID} log=${BOOTSTRAP_LOG_FILE}"
+  else
+    log_event ERROR installer failed \
+      "run_id=${BOOTSTRAP_RUN_ID} phase=${CURRENT_PHASE} codigo=${exit_code}"
+    if is_true "${DIAGNOSTIC_ON_ERROR}"; then
+      log_event INFO diagnostic started \
+        "executando diagnóstico automático no mesmo transcript"
+      if ! K8S_DIAGNOSTIC_PARENT_LOG="${BOOTSTRAP_LOG_FILE}" \
+        bash "${ROOT_DIR}/diagnose.sh" --no-log; then
+        log_event WARNING diagnostic issues-found \
+          "o diagnóstico confirmou estados pendentes; consulte o relatório acima"
+      fi
+    fi
+    log_event ERROR installer log-available "log=${BOOTSTRAP_LOG_FILE}"
+  fi
+  exit "${exit_code}"
+}
+
+trap 'on_install_exit "$?"' EXIT
+
 if command -v flock >/dev/null 2>&1; then
   exec 9>/run/lock/k8s-wsl-bootstrap.lock
   flock -n 9 || die "já existe outra execução do instalador em andamento."
 fi
 
+log_event INFO installer started \
+  "config=${K8S_CONFIG_FILE:-${ROOT_DIR}/cluster.env} fingerprint=$(desired_state_fingerprint)"
+
+CURRENT_PHASE="00-preflight"
+phase_started="${SECONDS}"
+log_event INFO "${CURRENT_PHASE}" running "validando host e cluster.env"
 bash "${ROOT_DIR}/scripts/00-preflight.sh"
 mark_step_complete "00-preflight"
+log_event INFO "${CURRENT_PHASE}" compliant "duration_seconds=$((SECONDS - phase_started))"
 
 steps=(
   10-prepare-host.sh
@@ -48,28 +85,40 @@ steps=(
 for step in "${steps[@]}"; do
   step_path="${ROOT_DIR}/scripts/${step}"
   step_name="${step%.sh}"
-  printf '\n\033[1;36m==> Verificando %s\033[0m\n' "${step}"
+  CURRENT_PHASE="${step_name}"
+  phase_started="${SECONDS}"
+  printf '\n'
+  log_event INFO "${step_name}" checking "validando estado real"
   if bash "${step_path}" --check; then
-    log "${step}: estado já está correto; nenhuma alteração necessária."
+    log_event INFO "${step_name}" compliant "nenhuma alteração necessária"
   else
-    printf '\033[1;36m==> Reconciliando %s\033[0m\n' "${step}"
+    log_event WARNING "${step_name}" reconciling "estado divergente; aplicando configuração"
     bash "${step_path}"
     bash "${step_path}" --check \
       || die "${step} terminou, mas a verificação pós-execução ainda falha."
+    log_event INFO "${step_name}" reconciled "verificação pós-execução aprovada"
   fi
   mark_step_complete "${step_name}"
+  log_event INFO "${step_name}" completed "duration_seconds=$((SECONDS - phase_started))"
 done
 
-printf '\n\033[1;36m==> Executando verificação final\033[0m\n'
+CURRENT_PHASE="90-verify"
+phase_started="${SECONDS}"
+printf '\n'
+log_event INFO "${CURRENT_PHASE}" running "executando verificação funcional final"
 bash "${ROOT_DIR}/scripts/90-verify.sh"
 mark_step_complete "90-verify"
+log_event INFO "${CURRENT_PHASE}" compliant "duration_seconds=$((SECONDS - phase_started))"
 
-printf '\n\033[1;32mInstalação concluída. Abra https://localhost:%s/?lng=%s no Windows.\033[0m\n' \
+printf '\nInstalação concluída. Abra https://localhost:%s/?lng=%s no Windows.\n' \
   "${DASHBOARD_LOCAL_PORT}" "${DASHBOARD_DEFAULT_LANGUAGE}"
 if systemctl is-active --quiet "${GATEWAY_FORWARD_SERVICE}"; then
-  printf '\033[1;32mGateway API pronto e aberto somente em http://localhost:%s. Use windows\\75-close-gateway-port.cmd para fechar.\033[0m\n' \
+  printf 'Gateway API pronto e aberto somente em http://localhost:%s. Use windows\\75-close-gateway-port.cmd para fechar.\n' \
     "${GATEWAY_LOCAL_PORT}"
 else
-  printf '\033[1;32mGateway API pronto e fechado no Windows. Use windows\\25-open-gateway-port.cmd para abrir http://localhost:%s.\033[0m\n' \
+  printf 'Gateway API pronto e fechado no Windows. Use windows\\25-open-gateway-port.cmd para abrir http://localhost:%s.\n' \
     "${GATEWAY_LOCAL_PORT}"
 fi
+
+printf 'Log completo: %s\n' "${BOOTSTRAP_LOG_FILE}"
+INSTALL_COMPLETED=true

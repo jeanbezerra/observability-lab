@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+NO_LOG=false
+
+if [[ "${EUID}" -ne 0 ]]; then
+  printf 'ERRO: execute dentro do Ubuntu WSL: sudo bash %s [cluster.env]\n' "$0" >&2
+  exit 1
+fi
+
+if [[ $# -gt 1 ]]; then
+  printf 'Uso: sudo bash %s [cluster.env]\n' "$0" >&2
+  exit 2
+fi
+
+if [[ $# -eq 1 ]]; then
+  if [[ "$1" == "--no-log" ]]; then
+    NO_LOG=true
+  else
+    K8S_CONFIG_FILE="$(realpath -- "$1")"
+    export K8S_CONFIG_FILE
+  fi
+fi
+
+# shellcheck source=scripts/lib/common.sh
+source "${ROOT_DIR}/scripts/lib/common.sh"
+
+require_command timeout
+
+if ! is_true "${NO_LOG}"; then
+  start_persistent_log diagnostic
+fi
+
+# O diagnóstico precisa continuar depois de cada falha para montar o panorama
+# completo; cada comando abaixo trata e registra o próprio código de saída.
+trap - ERR
+
+diagnostic_failures=0
+diagnostic_warnings=0
+
+record_failure() {
+  ((diagnostic_failures += 1))
+}
+
+record_warning() {
+  ((diagnostic_warnings += 1))
+}
+
+run_state_check() {
+  local step="$1" step_path="$2" check_argument="${3---check}"
+  local output exit_code started_at="${SECONDS}"
+  log_event INFO "${step}" checking "validando estado esperado pelo cluster.env"
+
+  if [[ -n "${check_argument}" ]]; then
+    if output="$(timeout --signal=TERM "${DIAGNOSTIC_CHECK_TIMEOUT_SECONDS}s" \
+      bash "${step_path}" "${check_argument}" 2>&1)"; then
+      exit_code=0
+    else
+      exit_code=$?
+    fi
+  elif output="$(timeout --signal=TERM "${DIAGNOSTIC_CHECK_TIMEOUT_SECONDS}s" \
+    bash "${step_path}" 2>&1)"; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+
+  if [[ -n "${output}" ]]; then
+    printf '%s\n' "${output}"
+  fi
+  if (( exit_code == 0 )); then
+    log_event INFO "${step}" compliant \
+      "duration_seconds=$((SECONDS - started_at))"
+  else
+    record_failure
+    if (( exit_code == 124 )); then
+      log_event ERROR "${step}" timeout \
+        "a verificação excedeu ${DIAGNOSTIC_CHECK_TIMEOUT_SECONDS}s"
+    else
+      log_event ERROR "${step}" divergent \
+        "codigo=${exit_code} duration_seconds=$((SECONDS - started_at))"
+    fi
+  fi
+}
+
+show_service_evidence() {
+  local service_name="$1"
+  systemctl status "${service_name}" --no-pager -l 2>&1 \
+    | tail -n "${DIAGNOSTIC_TAIL_LINES}" || true
+  journalctl -u "${service_name}" -b --no-pager -n "${DIAGNOSTIC_TAIL_LINES}" 2>&1 || true
+}
+
+config_source="${K8S_CONFIG_FILE:-${ROOT_DIR}/cluster.env}"
+[[ -r "${config_source}" ]] || config_source="defaults internos (cluster.env ausente)"
+log_event INFO diagnostic started \
+  "config=${config_source} fingerprint=$(desired_state_fingerprint) parent_log=${K8S_DIAGNOSTIC_PARENT_LOG:-none}"
+log_event INFO configuration effective \
+  "node=${NODE_NAME}/${NODE_IP} kubernetes=${KUBERNETES_MINOR} pod_cidr=${POD_NETWORK_CIDR} service_cidr=${SERVICE_CIDR} artifact_mode=${ARTIFACT_MODE}"
+log_event INFO configuration effective \
+  "headlamp=${DASHBOARD_NAMESPACE}:${DASHBOARD_LOCAL_PORT} gateway=${GATEWAY_NAMESPACE}/${GATEWAY_NAME}:${GATEWAY_LOCAL_PORT}"
+
+run_state_check "00-preflight" "${ROOT_DIR}/scripts/00-preflight.sh" ""
+
+state_steps=(
+  10-prepare-host.sh
+  20-install-containerd.sh
+  30-install-kubernetes.sh
+  40-bootstrap-cluster.sh
+  50-install-network.sh
+  52-install-helm.sh
+  55-install-gateway.sh
+  60-install-dashboard.sh
+  70-configure-local-access.sh
+  75-configure-gateway-access.sh
+)
+
+for step in "${state_steps[@]}"; do
+  run_state_check "${step%.sh}" "${ROOT_DIR}/scripts/${step}"
+done
+
+log_event INFO systemd checking "serviços gerenciados pelo deploy"
+required_services=(
+  "${WSL_NODE_IP_SERVICE}"
+  containerd
+  kubelet
+  "${HEADLAMP_FORWARD_SERVICE}"
+)
+for service_name in "${required_services[@]}"; do
+  enabled_state="$(systemctl is-enabled "${service_name}" 2>/dev/null || true)"
+  active_state="$(systemctl is-active "${service_name}" 2>/dev/null || true)"
+  if [[ "${enabled_state}" == "enabled" && "${active_state}" == "active" ]]; then
+    log_event INFO "systemd/${service_name}" healthy \
+      "enabled=${enabled_state} active=${active_state}"
+  else
+    record_failure
+    log_event ERROR "systemd/${service_name}" unhealthy \
+      "enabled=${enabled_state:-unknown} active=${active_state:-unknown}"
+    show_service_evidence "${service_name}"
+  fi
+done
+
+gateway_enabled="$(systemctl is-enabled "${GATEWAY_FORWARD_SERVICE}" 2>/dev/null || true)"
+gateway_active="$(systemctl is-active "${GATEWAY_FORWARD_SERVICE}" 2>/dev/null || true)"
+if [[ "${gateway_enabled}" == "enabled" && "${gateway_active}" != "active" ]]; then
+  record_failure
+  log_event ERROR "systemd/${GATEWAY_FORWARD_SERVICE}" unhealthy \
+    "o acesso opcional está habilitado, mas não está ativo"
+  show_service_evidence "${GATEWAY_FORWARD_SERVICE}"
+elif [[ "${gateway_active}" == "active" ]]; then
+  log_event INFO "systemd/${GATEWAY_FORWARD_SERVICE}" healthy \
+    "enabled=${gateway_enabled:-unknown} active=${gateway_active}; acesso opcional aberto"
+else
+  log_event INFO "systemd/${GATEWAY_FORWARD_SERVICE}" closed \
+    "enabled=${gateway_enabled:-unknown} active=${gateway_active:-unknown}; acesso opcional fechado"
+fi
+
+failed_units="$(systemctl --failed --no-legend --plain 2>/dev/null || true)"
+if [[ -n "${failed_units}" ]]; then
+  record_warning
+  log_event WARNING systemd failed-units "há unidades systemd em falha no WSL"
+  printf '%s\n' "${failed_units}"
+fi
+
+log_event INFO kubernetes checking "inventário e workloads com erro"
+if kube get --raw='/readyz' >/dev/null 2>&1; then
+  kube get nodes -o wide 2>&1 || true
+  kube get pods -A -o wide 2>&1 || true
+  kube get gatewayclass,gateway -A 2>&1 || true
+
+  mapfile -t pod_rows < <(kube get pods -A --no-headers 2>/dev/null || true)
+  for pod_row in "${pod_rows[@]}"; do
+    read -r pod_namespace pod_name pod_ready pod_status _ <<<"${pod_row}"
+    ready_count="${pod_ready%/*}"
+    container_count="${pod_ready#*/}"
+    if [[ "${pod_status}" == "Running" && "${ready_count}" == "${container_count}" ]] \
+      || [[ "${pod_status}" == "Completed" ]]; then
+      continue
+    fi
+    record_failure
+    log_event ERROR "pod/${pod_namespace}/${pod_name}" unhealthy \
+      "ready=${pod_ready} status=${pod_status}"
+    kube -n "${pod_namespace}" describe pod "${pod_name}" 2>&1 \
+      | tail -n "${DIAGNOSTIC_TAIL_LINES}" || true
+    kube -n "${pod_namespace}" logs "${pod_name}" --all-containers=true \
+      --prefix --tail="${DIAGNOSTIC_TAIL_LINES}" 2>&1 || true
+    kube -n "${pod_namespace}" logs "${pod_name}" --all-containers=true \
+      --prefix --previous --tail="${DIAGNOSTIC_TAIL_LINES}" 2>&1 || true
+  done
+
+  warning_events="$(kube get events -A --field-selector type=Warning \
+    --sort-by='.lastTimestamp' 2>/dev/null | tail -n "${DIAGNOSTIC_TAIL_LINES}" || true)"
+  if [[ -n "${warning_events}" && "${warning_events}" != "No resources found"* ]]; then
+    record_warning
+    log_event WARNING kubernetes warning-events \
+      "últimos eventos Warning (podem incluir ocorrências já recuperadas)"
+    printf '%s\n' "${warning_events}"
+  fi
+else
+  record_failure
+  log_event ERROR kubernetes api-unavailable \
+    "API Server não respondeu usando ${KUBECONFIG_ADMIN}"
+  show_service_evidence kubelet
+  show_service_evidence containerd
+fi
+
+if (( diagnostic_failures == 0 )); then
+  log_event INFO diagnostic healthy \
+    "failures=0 warnings=${diagnostic_warnings} log=${BOOTSTRAP_LOG_FILE:-${K8S_DIAGNOSTIC_PARENT_LOG:-stdout}}"
+  exit 0
+fi
+
+log_event ERROR diagnostic unhealthy \
+  "failures=${diagnostic_failures} warnings=${diagnostic_warnings} log=${BOOTSTRAP_LOG_FILE:-${K8S_DIAGNOSTIC_PARENT_LOG:-stdout}}"
+exit 1

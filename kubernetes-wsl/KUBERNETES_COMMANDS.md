@@ -757,6 +757,10 @@ Prefira executar os scripts: eles validam que o recurso pertence ao instalador, 
 ## Coleta para diagnóstico
 
 ```bash
+# Diagnóstico do instalador: usa cluster.env, não altera o estado e persiste o log
+sudo bash diagnose.sh cluster.env
+sudo less /var/log/k8s-wsl-bootstrap/latest-diagnostic.log
+
 # Visão ampla sem alterar o cluster
 kubectl cluster-info dump --output-directory=./cluster-dump
 

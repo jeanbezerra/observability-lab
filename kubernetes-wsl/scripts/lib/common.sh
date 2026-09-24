@@ -69,6 +69,10 @@ ALLOW_LOW_RESOURCES="${ALLOW_LOW_RESOURCES:-false}"
 AUTO_REPAIR_PARTIAL_CLUSTER="${AUTO_REPAIR_PARTIAL_CLUSTER:-true}"
 KUBECONFIG_ADMIN="${KUBECONFIG_ADMIN:-/etc/kubernetes/admin.conf}"
 BOOTSTRAP_STATE_DIR="${BOOTSTRAP_STATE_DIR:-/var/lib/k8s-wsl-bootstrap}"
+BOOTSTRAP_LOG_DIR="${BOOTSTRAP_LOG_DIR:-/var/log/k8s-wsl-bootstrap}"
+DIAGNOSTIC_ON_ERROR="${DIAGNOSTIC_ON_ERROR:-true}"
+DIAGNOSTIC_CHECK_TIMEOUT_SECONDS="${DIAGNOSTIC_CHECK_TIMEOUT_SECONDS:-45}"
+DIAGNOSTIC_TAIL_LINES="${DIAGNOSTIC_TAIL_LINES:-100}"
 WSL_NODE_IP_SERVICE="${WSL_NODE_IP_SERVICE:-k8s-wsl-node-ip.service}"
 HEADLAMP_FORWARD_SERVICE="${HEADLAMP_FORWARD_SERVICE:-k8s-headlamp-local.service}"
 GATEWAY_FORWARD_SERVICE="${GATEWAY_FORWARD_SERVICE:-k8s-gateway-local.service}"
@@ -76,16 +80,28 @@ OFFLINE_CACHE_FORMAT_VERSION="1"
 
 readonly LIB_DIR SCRIPTS_DIR PROJECT_DIR OFFLINE_CACHE_FORMAT_VERSION
 
+log_event() {
+  local level="$1" component="$2" status="$3"
+  shift 3
+  printf '%s | %-7s | %-28s | %-12s | %s\n' \
+    "$(date --iso-8601=seconds)" "${level}" "${component}" "${status}" "$*"
+}
+
+caller_component() {
+  local source_file="${BASH_SOURCE[2]:-${BASH_SOURCE[1]:-$0}}"
+  basename -- "${source_file%.sh}"
+}
+
 log() {
-  printf '\033[1;34m[%s]\033[0m %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+  log_event INFO "$(caller_component)" info "$*"
 }
 
 warn() {
-  printf '\033[1;33m[AVISO]\033[0m %s\n' "$*" >&2
+  log_event WARNING "$(caller_component)" warning "$*" >&2
 }
 
 die() {
-  printf '\033[1;31m[ERRO]\033[0m %s\n' "$*" >&2
+  log_event ERROR "$(caller_component)" failed "$*" >&2
   exit 1
 }
 
@@ -102,7 +118,30 @@ check_requested() {
 }
 
 check_pending() {
-  printf '\033[1;33m[PENDENTE]\033[0m %s\n' "$*" >&2
+  log_event WARNING "$(caller_component)" pending "$*" >&2
+}
+
+start_persistent_log() {
+  local log_kind="$1" timestamp latest_link
+  [[ "${log_kind}" =~ ^[a-z0-9-]+$ ]] || die "tipo de log inválido: ${log_kind}."
+  [[ "${BOOTSTRAP_LOG_DIR}" == /* ]] \
+    || die "BOOTSTRAP_LOG_DIR precisa ser um caminho Linux absoluto."
+
+  install -d -o root -g root -m 0700 "${BOOTSTRAP_LOG_DIR}"
+  timestamp="$(date '+%Y%m%d-%H%M%S')"
+  BOOTSTRAP_RUN_ID="${timestamp}-$$"
+  BOOTSTRAP_LOG_FILE="${BOOTSTRAP_LOG_DIR}/${log_kind}-${BOOTSTRAP_RUN_ID}.log"
+  latest_link="${BOOTSTRAP_LOG_DIR}/latest-${log_kind}.log"
+  install -o root -g root -m 0600 /dev/null "${BOOTSTRAP_LOG_FILE}"
+  ln -sfn -- "$(basename -- "${BOOTSTRAP_LOG_FILE}")" "${latest_link}"
+  export BOOTSTRAP_RUN_ID BOOTSTRAP_LOG_FILE
+
+  # Tudo que os scripts filhos escreverem em stdout/stderr também fica no Linux.
+  # O formato estruturado de log_event marca fases e resultados; a saída bruta
+  # entre esses eventos preserva integralmente a evidência dos comandos.
+  exec > >(tee -a "${BOOTSTRAP_LOG_FILE}") 2>&1
+  log_event INFO logger started \
+    "run_id=${BOOTSTRAP_RUN_ID} kind=${log_kind} file=${BOOTSTRAP_LOG_FILE}"
 }
 
 package_is_installed() {
@@ -427,8 +466,8 @@ retry_for() {
 on_error() {
   local exit_code="$1" failed_command="$2" failed_line="$3" failed_source="$4"
   trap - ERR
-  printf '\033[1;31m[ERRO]\033[0m %s:%s falhou (código %s). Comando: %s\n' \
-    "$(basename -- "${failed_source}")" "${failed_line}" "${exit_code}" "${failed_command}" >&2
+  log_event ERROR "$(basename -- "${failed_source%.sh}")" failed \
+    "linha=${failed_line} codigo=${exit_code} comando=${failed_command}" >&2
   exit "${exit_code}"
 }
 

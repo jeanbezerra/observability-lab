@@ -313,6 +313,10 @@ Não são instalados ou configurados: UFW, OIDC, Keycloak, Ingress NGINX, MetalL
 | `ARTIFACT_CACHE_DIR` | `offline-cache` no projeto | cache local separado por arquitetura |
 | `ALLOW_LOW_RESOURCES` | `false` | permite prosseguir abaixo dos mínimos |
 | `AUTO_REPAIR_PARTIAL_CLUSTER` | `true` | repara somente bootstrap incompleto sem `admin.conf` |
+| `BOOTSTRAP_LOG_DIR` | `/var/log/k8s-wsl-bootstrap` | diretório Linux dos transcripts de deploy e diagnóstico |
+| `DIAGNOSTIC_ON_ERROR` | `true` | executa o diagnóstico somente leitura quando o deploy falha |
+| `DIAGNOSTIC_CHECK_TIMEOUT_SECONDS` | `45` | limite individual de cada check do diagnóstico |
+| `DIAGNOSTIC_TAIL_LINES` | `100` | máximo de linhas por journal, evento ou log de Pod coletado |
 
 ## Operação diária
 
@@ -352,10 +356,30 @@ sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" bash scripts/75-configure-gat
 Logs relevantes:
 
 ```bash
+# Transcript completo do deploy mais recente
+sudo less /var/log/k8s-wsl-bootstrap/latest-deploy.log
+
+# Diagnóstico consolidado baseado no cluster.env (não altera o cluster)
+sudo bash diagnose.sh cluster.env
+sudo less /var/log/k8s-wsl-bootstrap/latest-diagnostic.log
+
 sudo journalctl -u containerd -u kubelet -u k8s-headlamp-local -u k8s-gateway-local -n 200 --no-pager
 kubectl -n kubernetes-dashboard logs deployment/headlamp --tail=200
 kubectl -n envoy-gateway-system logs deployment/envoy-gateway --tail=200
 ```
+
+Cada execução de `install-all.sh` cria um arquivo `deploy-AAAAMMDD-HHMMSS-PID.log`
+com modo `0600`. O formato registra data/hora, nível, componente, estado e mensagem,
+além de preservar toda a saída dos comandos filhos. O link `latest-deploy.log`
+aponta para a execução mais recente. Em caso de falha, o instalador acrescenta ao
+mesmo transcript os checks de todas as etapas, estados e journals de serviços,
+Pods não saudáveis, logs desses Pods e eventos Kubernetes do tipo `Warning`.
+
+`diagnose.sh` pode ser executado a qualquer momento. Ele carrega o mesmo
+`cluster.env`, compara a configuração desejada com o estado real e retorna `0`
+quando não encontra divergências ou `1` quando há algo pendente. O relatório
+mostra somente campos operacionais selecionados e o fingerprint da configuração;
+o conteúdo bruto do `cluster.env` não é copiado para o log.
 
 Consulte também [KUBERNETES_COMMANDS.md](KUBERNETES_COMMANDS.md).
 
@@ -370,6 +394,18 @@ Consulte também [KUBERNETES_COMMANDS.md](KUBERNETES_COMMANDS.md).
 - Exposição remota: deliberadamente não suportada. Headlamp e Gateway são alcançados do Windows apenas por túneis locais independentes.
 
 ## Diagnóstico
+
+### Relatório completo do estado atual
+
+```bash
+cd ~/kubernetes-wsl
+sudo bash diagnose.sh cluster.env
+sudo less /var/log/k8s-wsl-bootstrap/latest-diagnostic.log
+```
+
+O relatório continua após uma falha para mostrar também erros dependentes nas
+etapas seguintes. Isso ajuda a separar a causa inicial dos efeitos em Flannel,
+DNS, Envoy e Headlamp.
 
 ### A etapa 40 demorou ou foi interrompida
 
