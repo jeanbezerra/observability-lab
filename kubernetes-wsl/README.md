@@ -123,44 +123,34 @@ sudo bash install-all.sh cluster.env
 
 Não existe `oidc-secrets.env`. Para a instalação padrão, não é necessário alterar `cluster.env`.
 
+O `cluster.env` fica na raiz desta pasta, ao lado de `install-all.sh`. Ele é
+local e ignorado pelo Git. Se o projeto estiver em
+`/home/USUARIO/.../kubernetes-wsl`, esse será o caminho Linux; se estiver no
+disco `C:`, o WSL o enxergará em `/mnt/c/.../kubernetes-wsl/cluster.env`.
+
 O instalador é reconciliador: ao ser executado novamente, verifica cada etapa antes de alterá-la. Um cluster que já tenha `/etc/kubernetes/admin.conf` nunca é resetado automaticamente. O reparo com `kubeadm reset` é limitado a um bootstrap parcial sem `admin.conf`, após backup de `/etc/kubernetes`.
 
 ### Contingência para downloads bloqueados
 
-Em outra instalação Ubuntu 26.04 com Internet e com a mesma arquitetura do
-notebook corporativo, prepare o cache:
+No próprio Ubuntu WSL do notebook corporativo, execute:
 
 ```bash
-cd ~/kubernetes-wsl
-sudo bash prepare-offline-bundle.sh
+bash setup-offline-cache.sh
+sudo bash install-all.sh cluster.env
 ```
 
-O comando popula `offline-cache/amd64` (ou `arm64`) e cria em `dist/` um
-arquivo como `kubernetes-wsl-artifacts-ubuntu-26.04-v1.36-amd64.tar.gz`, junto
-com seu SHA-256. Use `--force` somente para substituir um cache anterior da
-mesma arquitetura.
+`setup-offline-cache.sh` faz tudo no Linux: baixa o bundle publicado pelo S3
+para `/tmp`, valida o SHA-256, extrai diretamente na pasta `offline-cache` do
+projeto, remove o download temporário e cria `cluster.env` se ele ainda não
+existir. O arquivo fica configurado com `ARTIFACT_MODE="cache"`.
 
 O bundle contém pacotes `.deb` e suas dependências, chave do repositório
 Kubernetes, Helm, manifesto do Flannel e charts do Envoy Gateway. Ele não
 contém imagens de contêiner. Portanto, o notebook ainda precisa alcançar os
 registries usados por kubeadm, Flannel, Headlamp e Envoy.
 
-Você pode copiar o projeto inteiro já com `offline-cache/`. Como alternativa,
-o CMD abaixo baixa automaticamente do bucket S3 o `.tar.gz` e seu `.sha256`,
-valida o arquivo e o importa, sem PowerShell:
-
-```bat
-windows\05-import-offline-bundle.cmd
-```
-
-O download fica em `dist/` e é reutilizado quando o hash publicado continua
-igual. Para um arquivo criado localmente por `prepare-offline-bundle.sh`, passe
-o caminho como argumento e mantenha o `.sha256` gerado ao lado dele.
-
-Com `ARTIFACT_MODE="auto"`, o instalador tenta a Internet e cai automaticamente
-para o cache verificado se o download falhar. Para evitar tentativas externas
-de pacotes e artefatos, use `ARTIFACT_MODE="cache"` em `cluster.env`. Os hashes,
-arquitetura, Ubuntu e versões são conferidos antes do uso.
+Para manter ou republicar o bundle, o fluxo separado continua disponível em
+`prepare-offline-bundle.sh`; ele não é necessário no notebook corporativo.
 
 ### Por que `NODE_IP` é fixo
 

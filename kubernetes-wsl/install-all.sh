@@ -66,5 +66,10 @@ mark_step_complete "90-verify"
 
 printf '\n\033[1;32mInstalação concluída. Abra https://localhost:%s/?lng=%s no Windows.\033[0m\n' \
   "${DASHBOARD_LOCAL_PORT}" "${DASHBOARD_DEFAULT_LANGUAGE}"
-printf '\033[1;32mGateway API pronto e fechado no Windows. Use windows\\25-open-gateway-port.cmd; destino local: http://localhost:%s.\033[0m\n' \
-  "${GATEWAY_LOCAL_PORT}"
+if systemctl is-active --quiet "${GATEWAY_FORWARD_SERVICE}"; then
+  printf '\033[1;32mGateway API pronto e aberto somente em http://localhost:%s. Use windows\\75-close-gateway-port.cmd para fechar.\033[0m\n' \
+    "${GATEWAY_LOCAL_PORT}"
+else
+  printf '\033[1;32mGateway API pronto e fechado no Windows. Use windows\\25-open-gateway-port.cmd para abrir http://localhost:%s.\033[0m\n' \
+    "${GATEWAY_LOCAL_PORT}"
+fi
