@@ -1,66 +1,44 @@
 # Utilitários CMD para Kubernetes no WSL 2
 
-Esta pasta contém somente scripts `.cmd`. Não há PowerShell. A numeração indica uma sequência operacional recomendada, mas os scripts são independentes e podem ser executados isoladamente.
+Esta pasta contém somente scripts `.cmd`; nenhum deles usa PowerShell. A numeração representa a sequência operacional sugerida. Os scripts continuam independentes e aceitam `/?` ou `--help`.
 
-O objetivo principal é controlar quando o Headlamp fica acessível no Windows sem publicar o cluster na LAN, VPN ou rede corporativa.
+Existem dois acessos locais e separados:
 
-## Modelo de rede e segurança
+| URL no Windows | Serviço systemd no WSL | Destino interno | Uso |
+|---|---|---|---|
+| `https://localhost:30443` | `k8s-headlamp-local.service` | `service/headlamp:443` | administração pelo Headlamp |
+| `http://localhost:30080` | `k8s-gateway-local.service` | Service Envoy gerado, porta `8080` | testar aplicações publicadas por `HTTPRoute`/`GRPCRoute` |
 
-A única porta publicada por estes utilitários é:
-
-| Origem | Destino | Finalidade |
-|---|---|---|
-| `https://localhost:30443` no Windows | `service/headlamp:443` no Kubernetes | interface web local |
-
-O encaminhamento real é executado dentro do WSL pelo serviço systemd `k8s-headlamp-local.service`:
-
-```text
-navegador do Windows
-  -> https://localhost:30443
-  -> encaminhamento localhost do WSL 2
-  -> kubectl port-forward --address=127.0.0.1
-  -> Service ClusterIP do Headlamp
-```
-
-Os scripts não:
-
-- criam `netsh portproxy`;
-- alteram Windows Firewall;
-- instalam ou configuram UFW;
-- expõem `0.0.0.0`, endereço da LAN ou VPN;
-- criam NodePort, LoadBalancer ou Ingress;
-- publicam a API Kubernetes `6443` no Windows.
-
-A API `6443`, as redes de Pods e as redes de Services continuam internas ao WSL. Como o Headlamp utiliza login automático com uma ServiceAccount administrativa, ele não deve ser publicado fora de `localhost`.
+Ambos usam `kubectl port-forward --address=127.0.0.1`. Os scripts não criam regra de Windows Firewall, não instalam UFW, não usam `netsh portproxy` e não expõem `0.0.0.0`, LAN ou VPN. Os Services permanecem `ClusterIP`; a API Kubernetes `6443` também não é publicada por estes utilitários.
 
 ## Sequência recomendada
 
-Depois da primeira instalação:
+Verifique tudo:
 
 ```bat
-00-check-environment.cmd Ubuntu-26.04 30443
+00-check-environment.cmd Ubuntu-26.04 30443 30080
+```
+
+Abra somente o que estiver usando:
+
+```bat
 20-open-cluster-ports.cmd Ubuntu-26.04 30443
+25-open-gateway-port.cmd Ubuntu-26.04 30080
 30-trust-headlamp-ca.cmd Ubuntu-26.04
 40-open-headlamp.cmd 30443
+45-test-gateway.cmd 30080
 ```
 
-Ao terminar o trabalho:
+Ao terminar, feche os dois túneis de forma persistente:
 
 ```bat
+75-close-gateway-port.cmd Ubuntu-26.04 30080
 80-close-cluster-ports.cmd Ubuntu-26.04 30443
 ```
 
-Para reabrir em outro momento:
+A CA do Headlamp pode permanecer confiável com as portas fechadas. Para removê-la do usuário atual:
 
 ```bat
-20-open-cluster-ports.cmd Ubuntu-26.04 30443
-40-open-headlamp.cmd 30443
-```
-
-Para remover completamente a confiança local no certificado:
-
-```bat
-80-close-cluster-ports.cmd Ubuntu-26.04 30443
 90-untrust-headlamp-ca.cmd
 ```
 
@@ -68,181 +46,142 @@ Para remover completamente a confiança local no certificado:
 
 ### `00-check-environment.cmd`
 
-Executa verificações somente leitura:
-
-1. confirma que `wsl.exe` está disponível;
-2. confirma que a distribuição existe e utiliza WSL 2;
-3. verifica se systemd é o PID 1;
-4. verifica se `k8s-headlamp-local.service` foi instalado;
-5. informa se o serviço está ativo e se o Headlamp responde no Windows.
-
-Uso:
+Faz somente leitura. Confirma que a distribuição existe, usa WSL 2 e iniciou com systemd; verifica se as duas unidades de encaminhamento foram instaladas; informa se estão ativas; testa as duas URLs quando `curl.exe` existe.
 
 ```bat
-00-check-environment.cmd [DISTRIBUICAO] [PORTA]
+00-check-environment.cmd [DISTRIBUICAO] [PORTA_HEADLAMP] [PORTA_GATEWAY]
 ```
 
-Padrões: `Ubuntu-26.04` e `30443`.
-
-Esse script não abre ou fecha portas. Consultar uma distribuição parada pode fazer o próprio `wsl.exe` iniciá-la, mas nenhuma configuração é alterada.
+Padrões: `Ubuntu-26.04`, `30443` e `30080`. Consultar uma distribuição parada pode iniciá-la, comportamento normal de `wsl.exe`, mas o script não inicia nem encerra os túneis.
 
 ### `10-restart-wsl.cmd`
 
-Encerra somente a distribuição informada com `wsl.exe --terminate` e a inicia novamente. Use após modificar `/etc/wsl.conf` ou `%UserProfile%\.wslconfig`.
-
-Uso:
+Encerra somente a distribuição indicada com `wsl.exe --terminate` e a inicia novamente. Use depois de mudar `/etc/wsl.conf` ou `%UserProfile%\.wslconfig`.
 
 ```bat
 10-restart-wsl.cmd [DISTRIBUICAO]
 ```
 
-Padrão: `Ubuntu-26.04`.
-
-Esse script não executa `wsl.exe --shutdown`, portanto não encerra deliberadamente outras distribuições. Encerrar uma distribuição interrompe os processos que estiverem nela; salve trabalhos antes.
+Padrão: `Ubuntu-26.04`. Salve trabalhos antes: encerrar a distribuição termina os processos Linux em execução. O script não usa `wsl.exe --shutdown`, portanto não encerra deliberadamente outras distribuições.
 
 ### `20-open-cluster-ports.cmd`
 
-Habilita e inicia `k8s-headlamp-local.service`. O serviço executa o `kubectl port-forward` restrito a `127.0.0.1` dentro do WSL.
-
-Uso:
+Habilita e inicia `k8s-headlamp-local.service`, preso a `127.0.0.1`. O `enable` é persistente: o Headlamp voltará no próximo boot do WSL até o script `80` ser executado.
 
 ```bat
 20-open-cluster-ports.cmd [DISTRIBUICAO] [PORTA]
 ```
 
-Padrões: `Ubuntu-26.04` e `30443`.
+Padrões: `Ubuntu-26.04` e `30443`. A porta informada apenas valida a URL; para reconfigurá-la, mude `DASHBOARD_LOCAL_PORT` em `cluster.env` e reconcilie a instalação.
 
-O script:
+### `25-open-gateway-port.cmd`
 
-- valida que a unidade systemd existe;
-- executa `systemctl enable --now` dentro do WSL;
-- confirma que o serviço permaneceu ativo;
-- testa `https://localhost:PORTA` com `curl.exe`, quando disponível.
+Habilita e inicia `k8s-gateway-local.service`. A unidade descobre o Service Envoy gerado para `gateway-system/wsl-gateway` e encaminha `localhost:30080` para a porta interna `8080`.
 
-O `enable` é intencional: depois de aberta, a porta volta a ficar disponível quando a distribuição reiniciar. Use o script `80` para mudar esse estado persistentemente para fechado.
+```bat
+25-open-gateway-port.cmd [DISTRIBUICAO] [PORTA]
+```
 
-O parâmetro `PORTA` serve para validar a porta configurada durante a instalação. Informar outra porta não reconfigura o cluster. Para trocar a porta real, ajuste `DASHBOARD_LOCAL_PORT` em `cluster.env` e reconcilie a instalação.
+Padrões: `Ubuntu-26.04` e `30080`. Uma resposta HTTP `404` é sucesso de conectividade quando nenhuma rota corresponde a `/`. Para mudar a porta real, altere `GATEWAY_LOCAL_PORT` em `cluster.env` e execute novamente `install-all.sh`.
 
 ### `30-trust-headlamp-ca.cmd`
 
-Importa a CA pública do Headlamp no repositório de certificados do usuário atual do Windows.
-
-Uso:
+Copia somente a CA pública `/etc/kubernetes/pki/headlamp/ca.crt` para um arquivo temporário, valida o PEM, importa no repositório do usuário atual com `certutil.exe -user` e remove a cópia temporária.
 
 ```bat
 30-trust-headlamp-ca.cmd [DISTRIBUICAO]
 ```
 
-Padrão: `Ubuntu-26.04`.
-
-O script:
-
-- lê `/etc/kubernetes/pki/headlamp/ca.crt` dentro do WSL;
-- grava uma cópia temporária em `%TEMP%`;
-- valida que o arquivo contém um certificado PEM;
-- importa com `certutil.exe -user`;
-- apaga a cópia temporária em sucesso ou erro.
-
-Somente o certificado público sai do WSL. A chave privada `/etc/kubernetes/pki/headlamp/ca.key` não é copiada. A opção `-user` limita a confiança ao usuário atual e normalmente dispensa elevação administrativa.
+Padrão: `Ubuntu-26.04`. A chave privada nunca sai do WSL. Em condições normais não é necessário CMD elevado.
 
 ### `40-open-headlamp.cmd`
 
-Testa a URL, quando `curl.exe` está disponível, e abre o navegador padrão.
-
-Uso:
+Valida `https://localhost:PORTA` quando `curl.exe` existe e abre o navegador padrão. Não inicia o túnel nem altera certificados.
 
 ```bat
 40-open-headlamp.cmd [PORTA]
 ```
 
-Padrão: `30443`.
+Padrão: `30443`. Execute antes o script `20`.
 
-Esse script não cria encaminhamento. Se a porta estiver fechada, execute primeiro `20-open-cluster-ports.cmd`.
+### `45-test-gateway.cmd`
+
+Faz um `GET /`, exibe os cabeçalhos HTTP do Envoy e não altera serviço algum.
+
+```bat
+45-test-gateway.cmd [PORTA]
+```
+
+Padrão: `30080`. HTTP `404` significa “Envoy acessível, nenhuma rota combinou”; erro de conexão significa que o túnel está fechado ou falhou. Para uma rota por prefixo, use diretamente `curl.exe http://localhost:30080/SEU_CAMINHO`.
+
+### `75-close-gateway-port.cmd`
+
+Executa `systemctl disable --now k8s-gateway-local.service` e espera a porta HTTP deixar de responder.
+
+```bat
+75-close-gateway-port.cmd [DISTRIBUICAO] [PORTA]
+```
+
+Padrões: `Ubuntu-26.04` e `30080`. Gateway, rotas, Envoy e aplicações continuam funcionando dentro do cluster; somente o acesso do Windows é fechado.
 
 ### `80-close-cluster-ports.cmd`
 
-Para e desabilita `k8s-headlamp-local.service` por meio de `systemctl disable --now`.
-
-Uso:
+Executa `systemctl disable --now k8s-headlamp-local.service` e espera a porta HTTPS deixar de responder.
 
 ```bat
 80-close-cluster-ports.cmd [DISTRIBUICAO] [PORTA]
 ```
 
-Padrões: `Ubuntu-26.04` e `30443`.
-
-O fechamento é persistente: o túnel não volta no próximo boot do WSL até que o script `20` seja executado. O script também testa se `localhost:PORTA` deixou de responder.
-
-O cluster e seus Pods continuam funcionando dentro do WSL. Somente o acesso do Windows ao Headlamp é fechado. Como nenhuma regra de firewall ou `portproxy` é criada pelo projeto, não existe regra externa a remover.
+Padrões: `Ubuntu-26.04` e `30443`. O fechamento é persistente e não para o cluster.
 
 ### `90-untrust-headlamp-ca.cmd`
 
-Remove do usuário atual do Windows a CA denominada `kubernetes-wsl-headlamp-ca`.
-
-Uso:
+Remove do repositório de certificados do usuário atual a CA `kubernetes-wsl-headlamp-ca`.
 
 ```bat
 90-untrust-headlamp-ca.cmd
 ```
 
-Esse script não fecha portas nem remove certificados ou chaves do WSL. Normalmente ele só é necessário ao desativar o laboratório ou recriar sua autoridade certificadora.
+Não fecha portas nem apaga certificados no Linux. Use ao desativar o laboratório ou recriar a CA.
 
-## Arquivo `.wslconfig.example`
+## `.wslconfig.example`
 
-O arquivo oculto `.wslconfig.example` limita CPU, memória e swap e mantém `localhostForwarding=true` com rede NAT.
-
-Para aplicá-lo ao usuário atual, execute no CMD a partir da raiz de `kubernetes-wsl`:
+O arquivo limita CPU, memória e swap e mantém `localhostForwarding=true` em modo NAT. Revise os valores: `%UserProfile%\.wslconfig` afeta todas as distribuições WSL 2 do usuário.
 
 ```bat
-copy windows\.wslconfig.example "%UserProfile%\.wslconfig"
-windows\10-restart-wsl.cmd Ubuntu-26.04
+copy .wslconfig.example "%UserProfile%\.wslconfig"
+10-restart-wsl.cmd Ubuntu-26.04
 ```
 
-Revise os valores antes de copiar. `%UserProfile%\.wslconfig` afeta todas as distribuições WSL 2 do usuário.
+## Privilégios e segurança de parâmetros
 
-## Privilégios
+Os scripts foram feitos para CMD normal. `wsl.exe --user root` concede privilégio somente dentro da distribuição Linux. Se a empresa bloquear esse recurso ou o próprio WSL, use o fluxo aprovado pela TI; os scripts não tentam contornar políticas corporativas.
 
-Os scripts foram projetados para CMD normal. Eles não invocam PowerShell.
-
-- `certutil.exe -user` altera somente o repositório do usuário atual.
-- `wsl.exe --user root` obtém privilégio apenas dentro da distribuição Linux.
-- nenhuma regra do Windows Firewall é criada.
-
-Se a política corporativa bloquear o próprio WSL ou `wsl.exe --user root`, abra CMD como administrador conforme a política da empresa ou solicite a habilitação à TI. Os scripts não tentam contornar políticas corporativas.
-
-## Ajuda e códigos de saída
-
-Todos os `.cmd` aceitam `/?` ou `--help`:
-
-```bat
-20-open-cluster-ports.cmd /?
-```
-
-Código `0` indica que a ação ou verificação principal terminou. Código diferente de `0` indica que nenhuma confirmação segura pôde ser obtida; leia a mensagem antes de repetir o comando.
-
-Por segurança, `DISTRIBUICAO` aceita somente letras, números, ponto, sublinhado e hífen; nomes com espaços não são aceitos. `PORTA` aceita somente dígitos. Esses limites evitam que parâmetros sejam interpretados como comandos pelo CMD.
+`DISTRIBUICAO` aceita somente letras, números, ponto, sublinhado e hífen. Parâmetros de porta aceitam somente dígitos. Essas restrições impedem que texto fornecido ao CMD seja interpretado como outro comando.
 
 ## Diagnóstico
 
 Estado geral:
 
 ```bat
-00-check-environment.cmd Ubuntu-26.04 30443
+00-check-environment.cmd Ubuntu-26.04 30443 30080
 ```
 
-Logs do encaminhamento, sem PowerShell:
+Logs no WSL, ainda pelo CMD:
 
 ```bat
 wsl.exe -d Ubuntu-26.04 --user root -- journalctl -u k8s-headlamp-local.service -n 100 --no-pager
+wsl.exe -d Ubuntu-26.04 --user root -- journalctl -u k8s-gateway-local.service -n 100 --no-pager
 ```
 
-Processo que ocupa a porta no Windows:
+Processos que ocupam as portas no Windows:
 
 ```bat
 netstat.exe -ano | findstr.exe ":30443"
+netstat.exe -ano | findstr.exe ":30080"
 ```
 
-Se o serviço estiver ativo dentro do WSL, mas a URL não responder no Windows, confirme que `%UserProfile%\.wslconfig` contém:
+Se o serviço estiver ativo no WSL e a URL não responder no Windows, confirme em `%UserProfile%\.wslconfig`:
 
 ```ini
 [wsl2]
@@ -250,9 +189,4 @@ localhostForwarding=true
 networkingMode=nat
 ```
 
-Depois execute:
-
-```bat
-10-restart-wsl.cmd Ubuntu-26.04
-20-open-cluster-ports.cmd Ubuntu-26.04 30443
-```
+Depois reinicie apenas a distribuição e reabra o túnel necessário.

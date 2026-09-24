@@ -1,13 +1,13 @@
 # Kubernetes local no WSL 2 — Ubuntu 26.04
 
-Esta pasta cria um cluster Kubernetes de nó único dentro do **WSL 2 com Ubuntu 26.04**, usando `kubeadm`, `containerd`, Flannel e Headlamp. A variante foi desenhada para um notebook corporativo:
+Esta pasta cria um cluster Kubernetes de nó único dentro do **WSL 2 com Ubuntu 26.04**, usando `kubeadm`, `containerd`, Flannel, Headlamp, Gateway API e Envoy Gateway. A variante foi desenhada para um notebook corporativo:
 
 - não instala, ativa ou configura UFW;
 - não usa OIDC, Keycloak ou arquivo de secrets;
 - não exige colar tokens no Headlamp;
 - não depende de Docker Desktop;
 - não usa PowerShell;
-- não expõe NodePort nem porta em `0.0.0.0`;
+- mantém Headlamp e Envoy em `ClusterIP`, sem NodePort nem porta em `0.0.0.0`;
 - requer privilégio administrativo no Windows apenas se o WSL ainda precisar ser habilitado pela empresa.
 
 O `sudo` dentro do Ubuntu continua necessário para instalar pacotes e executar o kubelet. Esse privilégio Linux é separado da conta administrativa do Windows.
@@ -32,7 +32,19 @@ Headlamp Pod --unsafe-use-service-account-token
 ServiceAccount headlamp -> cluster-admin (somente laboratório local)
 ```
 
-O modo automático do Headlamp entrega privilégios administrativos a qualquer pessoa que consiga alcançar a interface. Por isso esta automação mantém o Service como `ClusterIP` e prende o único túnel a `127.0.0.1`. Não publique essa porta com `netsh portproxy`, proxy reverso, túnel ou regra de rede.
+O modo automático do Headlamp entrega privilégios administrativos a qualquer pessoa que consiga alcançar a interface. Por isso esta automação mantém o Service como `ClusterIP` e prende seu túnel a `127.0.0.1`. Não publique essa porta com `netsh portproxy`, proxy reverso, túnel ou regra de rede.
+
+O tráfego das aplicações usa um segundo caminho, independente e também local:
+
+```text
+cliente no Windows -> http://localhost:30080
+  -> systemd: kubectl port-forward --address=127.0.0.1
+  -> Service ClusterIP do Envoy
+  -> Gateway/HTTPRoute ou GRPCRoute
+  -> Service da aplicação
+```
+
+O túnel do Gateway é instalado **fechado por padrão**. Criar rotas não publica automaticamente a porta no Windows.
 
 ## 1. Preparar o WSL 2 pelo CMD
 
@@ -172,17 +184,58 @@ Para remover essa confiança depois, também sem administrador:
 windows\90-untrust-headlamp-ca.cmd
 ```
 
+## 5. Usar Gateway API e Envoy Gateway
+
+O instalador cria `GatewayClass/envoy-wsl` e `Gateway/gateway-system/wsl-gateway`. O listener HTTP usa a porta interna `8080`, aceita rotas de todos os namespaces e mantém o Service Envoy como `ClusterIP`. Referências de uma rota para backends em outro namespace continuam bloqueadas até existir um `ReferenceGrant` explícito no namespace do backend.
+
+No Headlamp, o menu **Gateway (beta)** passa a mostrar objetos reais do cluster:
+
+- `Gateways`, `Classes de Gateway`, `Rotas HTTP` e `Rotas GRPC` usam Gateway API `v1`;
+- `Concessões de Referência` mostra `ReferenceGrant v1`;
+- `BackendTLSPolicies` usa Gateway API `v1` para TLS entre Envoy e backend;
+- `BackendTrafficPolicies` usa a extensão `gateway.envoyproxy.io/v1alpha1` para circuit breaker, retry, rate limit e outras políticas do Envoy.
+
+O rótulo “beta” é da área do Headlamp. Gateway API `v1.6.1` está no canal **Standard**, e os tipos Gateway API acima são servidos em `v1`. Envoy Gateway `v1.9.1` e Helm `v4.3.0` são releases estáveis. A exceção deliberada é `BackendTrafficPolicy`: o Envoy Gateway está estável, mas essa API específica ainda é `v1alpha1`; por isso nenhum exemplo dela é aplicado automaticamente.
+
+O diretório [manifests/gateway/examples](manifests/gateway/examples/README.md) contém exemplos opt-in de `HTTPRoute`, `GRPCRoute`, `ReferenceGrant`, `BackendTLSPolicy` e `BackendTrafficPolicy`. O instalador não cria aplicação de demonstração nem associa o Headlamp ao Gateway.
+
+Para abrir o acesso HTTP de aplicações no Windows:
+
+```bat
+windows\25-open-gateway-port.cmd Ubuntu-26.04 30080
+windows\45-test-gateway.cmd 30080
+```
+
+HTTP `404` significa que o Envoy respondeu, mas nenhuma rota combinou com `/`. Depois de aplicar o exemplo `HTTPRoute`, teste o caminho configurado:
+
+```bat
+curl.exe http://localhost:30080/app
+```
+
+Feche persistentemente ao terminar:
+
+```bat
+windows\75-close-gateway-port.cmd Ubuntu-26.04 30080
+```
+
+Isso para apenas o port-forward. O Gateway e as aplicações continuam internos ao cluster.
+
 ## O que é instalado
 
 - Kubernetes `v1.36` pelo repositório `pkgs.k8s.io`;
 - `containerd` e `runc` do Ubuntu, com cgroups `systemd`;
 - `kubeadm`, `kubelet`, `kubectl`, CNI plugins e `crictl`;
 - Flannel `v0.28.8`, com manifesto validado por SHA-256;
+- Helm `v4.3.0`, com pacote validado por SHA-256;
+- Gateway API `v1.6.1`, canal Standard;
+- Envoy Gateway `v1.9.1`, com charts OCI fixados e validados por SHA-256;
+- `GatewayClass/envoy-wsl`, `Gateway/gateway-system/wsl-gateway` e dataplane Envoy `ClusterIP`;
 - Headlamp `v0.45.0` com HTTPS no backend;
 - serviço systemd para o IPv4 estável do nó;
-- serviço systemd para o encaminhamento HTTPS em `127.0.0.1`.
+- serviço systemd para o encaminhamento HTTPS em `127.0.0.1`;
+- serviço systemd, desabilitado por padrão, para o Envoy em `127.0.0.1`.
 
-Não são instalados ou configurados: UFW, OIDC, Keycloak, ingress controller, LoadBalancer, NodePort, Docker Desktop ou componentes no Windows.
+Não são instalados ou configurados: UFW, OIDC, Keycloak, Ingress NGINX, MetalLB, LoadBalancer, NodePort, Docker Desktop ou componentes no Windows.
 
 ## Configuração
 
@@ -196,6 +249,13 @@ Não são instalados ou configurados: UFW, OIDC, Keycloak, ingress controller, L
 | `SERVICE_CIDR` | `10.96.0.0/12` | rede dos Services |
 | `DASHBOARD_LOCAL_PORT` | `30443` | porta local do Windows/WSL |
 | `DASHBOARD_DEFAULT_LANGUAGE` | `pt` | idioma do link do Headlamp |
+| `HELM_VERSION` | `v4.3.0` | versão reproduzível usada para os charts OCI |
+| `GATEWAY_API_VERSION` | `v1.6.1` | bundle Standard compatível com o Envoy Gateway fixado |
+| `ENVOY_GATEWAY_VERSION` | `v1.9.1` | release estável do controlador e dataplane |
+| `GATEWAY_CLASS_NAME` | `envoy-wsl` | classe selecionada pelas instâncias Gateway |
+| `GATEWAY_NAMESPACE` / `GATEWAY_NAME` | `gateway-system` / `wsl-gateway` | Gateway HTTP base |
+| `GATEWAY_LISTENER_PORT` | `8080` | porta interna do listener/Service Envoy |
+| `GATEWAY_LOCAL_PORT` | `30080` | porta opcional em `127.0.0.1` para o Windows |
 | `ALLOW_LOW_RESOURCES` | `false` | permite prosseguir abaixo dos mínimos |
 | `AUTO_REPAIR_PARTIAL_CLUSTER` | `true` | repara somente bootstrap incompleto sem `admin.conf` |
 
@@ -207,7 +267,9 @@ O cluster inicia quando a distribuição WSL é iniciada. Não é preciso execut
 kubectl get nodes -o wide
 kubectl get pods -A
 kubectl -n kubernetes-dashboard get deployment,pod,service
-systemctl status containerd kubelet k8s-headlamp-local --no-pager
+systemctl status containerd kubelet k8s-headlamp-local k8s-gateway-local --no-pager
+kubectl get gatewayclass,gateway -A
+kubectl get httproute,grpcroute,referencegrant,backendtlspolicy -A
 ```
 
 Verificação completa:
@@ -224,22 +286,31 @@ sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" bash scripts/60-install-dashb
 sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" bash scripts/70-configure-local-access.sh
 ```
 
+Reconciliar somente Gateway API, Envoy e o mecanismo de acesso local:
+
+```bash
+sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" bash scripts/52-install-helm.sh
+sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" bash scripts/55-install-gateway.sh
+sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" bash scripts/75-configure-gateway-access.sh
+```
+
 Logs relevantes:
 
 ```bash
-sudo journalctl -u containerd -u kubelet -u k8s-headlamp-local -n 200 --no-pager
+sudo journalctl -u containerd -u kubelet -u k8s-headlamp-local -u k8s-gateway-local -n 200 --no-pager
 kubectl -n kubernetes-dashboard logs deployment/headlamp --tail=200
+kubectl -n envoy-gateway-system logs deployment/envoy-gateway --tail=200
 ```
 
 Consulte também [KUBERNETES_COMMANDS.md](KUBERNETES_COMMANDS.md).
 
 ## Ambiente corporativo
 
-- VPN e proxy: o WSL atual pode herdar proxy e DNS do Windows. Se downloads falharem, valide `getent hosts pkgs.k8s.io` e `curl -I https://pkgs.k8s.io` antes de instalar.
+- VPN e proxy: o WSL atual pode herdar proxy e DNS do Windows. Se downloads falharem, valide `pkgs.k8s.io`, `get.helm.sh`, `docker.io` e `registry-1.docker.io`; os charts e as imagens do Envoy vêm do Docker Hub.
 - Proxy autenticado: prefira configuração corporativa de APT e variáveis de ambiente fornecidas pela TI; não versione credenciais em `cluster.env`.
 - Política de execução: os scripts Windows são `.cmd`, não usam PowerShell e controlam o túnel por `wsl.exe`/systemd.
 - Firewall: esta pasta não chama `ufw`, `netsh advfirewall` ou APIs do Windows Firewall.
-- Exposição remota: deliberadamente não suportada enquanto o Headlamp estiver em login automático com `cluster-admin`.
+- Exposição remota: deliberadamente não suportada. Headlamp e Gateway são alcançados do Windows apenas por túneis locais independentes.
 
 ## Diagnóstico
 
@@ -266,6 +337,24 @@ curl --cacert ~/.kube/headlamp-ca.crt https://127.0.0.1:30443/
 
 Se a porta estiver ocupada, altere `DASHBOARD_LOCAL_PORT` no `cluster.env` e reexecute `install-all.sh`.
 
+### Gateway responde `404`
+
+Isso é normal sem uma `HTTPRoute` que combine com host e caminho. Confira os vínculos e condições:
+
+```bash
+kubectl get gatewayclass,gateway,httproute,grpcroute -A
+kubectl describe gateway wsl-gateway -n gateway-system
+kubectl describe httproute NOME -n NAMESPACE
+```
+
+Se a URL nem conectar, abra o túnel pelo CMD com `windows\25-open-gateway-port.cmd`. Para diagnóstico no WSL:
+
+```bash
+sudo systemctl status k8s-gateway-local --no-pager
+sudo journalctl -u k8s-gateway-local -n 100 --no-pager
+kubectl -n envoy-gateway-system logs deployment/envoy-gateway --tail=200
+```
+
 ### Cluster não volta após reiniciar o WSL
 
 ```bash
@@ -284,3 +373,6 @@ O endereço configurado em `NODE_IP` deve aparecer como `/32` na interface `lo`.
 - [Instalação do kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/)
 - [Gerenciamento de swap no Kubernetes](https://kubernetes.io/docs/concepts/cluster-administration/swap-memory-management/)
 - [Headlamp em cluster](https://headlamp.dev/docs/latest/installation/in-cluster/)
+- [Gateway API](https://gateway-api.sigs.k8s.io/)
+- [Instalação Helm do Envoy Gateway](https://gateway.envoyproxy.io/docs/install/install-helm/)
+- [Matriz de compatibilidade do Envoy Gateway](https://gateway.envoyproxy.io/news/releases/matrix/)

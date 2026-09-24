@@ -47,6 +47,9 @@ fi
 kubernetes_minor_number="${KUBERNETES_MINOR#v1.}"
 (( 10#${kubernetes_minor_number} >= 31 )) \
   || die "esta variante usa a API kubeadm v1beta4 e exige Kubernetes v1.31 ou superior."
+if (( 10#${kubernetes_minor_number} < 33 || 10#${kubernetes_minor_number} > 36 )); then
+  die "Envoy Gateway ${ENVOY_GATEWAY_VERSION} foi homologado aqui somente com Kubernetes v1.33 a v1.36."
+fi
 valid_ipv4_cidr "${POD_NETWORK_CIDR}" || die "POD_NETWORK_CIDR inválido."
 valid_ipv4_cidr "${SERVICE_CIDR}" || die "SERVICE_CIDR inválido."
 valid_ipv4 "${NODE_IP}" || die "NODE_IP inválido."
@@ -60,6 +63,16 @@ if [[ ! "${DASHBOARD_LOCAL_PORT}" =~ ^[0-9]+$ ]] \
   || (( DASHBOARD_LOCAL_PORT < 1024 || DASHBOARD_LOCAL_PORT > 65535 )); then
   die "DASHBOARD_LOCAL_PORT deve estar entre 1024 e 65535."
 fi
+if [[ ! "${GATEWAY_LOCAL_PORT}" =~ ^[0-9]+$ ]] \
+  || (( GATEWAY_LOCAL_PORT < 1024 || GATEWAY_LOCAL_PORT > 65535 )); then
+  die "GATEWAY_LOCAL_PORT deve estar entre 1024 e 65535."
+fi
+if [[ ! "${GATEWAY_LISTENER_PORT}" =~ ^[0-9]+$ ]] \
+  || (( GATEWAY_LISTENER_PORT < 1 || GATEWAY_LISTENER_PORT > 65535 )); then
+  die "GATEWAY_LISTENER_PORT deve estar entre 1 e 65535."
+fi
+[[ "${GATEWAY_LOCAL_PORT}" != "${DASHBOARD_LOCAL_PORT}" ]] \
+  || die "GATEWAY_LOCAL_PORT e DASHBOARD_LOCAL_PORT precisam ser diferentes."
 if [[ ! "${DASHBOARD_CERT_DAYS}" =~ ^[0-9]+$ ]] || (( DASHBOARD_CERT_DAYS < 1 )); then
   die "DASHBOARD_CERT_DAYS inválido."
 fi
@@ -70,10 +83,35 @@ id "${ADMIN_USER}" >/dev/null 2>&1 \
   || die "NODE_NAME inválido para Kubernetes: ${NODE_NAME}."
 [[ "${DASHBOARD_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] \
   || die "DASHBOARD_NAMESPACE inválido."
+for dns_name_var in ENVOY_PROXY_NAME GATEWAY_CLASS_NAME GATEWAY_NAME; do
+  dns_name_value="${!dns_name_var}"
+  [[ "${dns_name_value}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || die "${dns_name_var} inválido para Kubernetes/Helm: ${dns_name_value}."
+done
+for dns_label_var in ENVOY_GATEWAY_NAMESPACE GATEWAY_NAMESPACE; do
+  dns_label_value="${!dns_label_var}"
+  [[ "${dns_label_value}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && "${#dns_label_value}" -le 63 ]] \
+    || die "${dns_label_var} precisa ser um label DNS Kubernetes de até 63 caracteres."
+done
+[[ "${ENVOY_GATEWAY_RELEASE}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ \
+  && "${#ENVOY_GATEWAY_RELEASE}" -le 53 ]] \
+  || die "ENVOY_GATEWAY_RELEASE inválido para Helm (máximo 53 caracteres)."
+[[ "${HELM_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || die "HELM_VERSION inválido: ${HELM_VERSION}."
+[[ "${GATEWAY_API_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || die "GATEWAY_API_VERSION inválido: ${GATEWAY_API_VERSION}."
+[[ "${ENVOY_GATEWAY_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || die "ENVOY_GATEWAY_VERSION inválido: ${ENVOY_GATEWAY_VERSION}."
+for checksum_var in HELM_SHA256_AMD64 HELM_SHA256_ARM64 ENVOY_GATEWAY_CHART_SHA256 \
+  ENVOY_GATEWAY_CRDS_CHART_SHA256; do
+  checksum_value="${!checksum_var}"
+  [[ "${checksum_value}" =~ ^[0-9a-f]{64}$ ]] \
+    || die "${checksum_var} precisa ser um SHA-256 hexadecimal de 64 caracteres."
+done
 [[ "${HEADLAMP_IMAGE}" =~ ^[a-zA-Z0-9._/:@-]+$ ]] || die "HEADLAMP_IMAGE contém caracteres inválidos."
 case "${DASHBOARD_DEFAULT_LANGUAGE}" in
   en|es|fr|ru|pt|de|it|zh-TW|zh|ko|ja|hi|bn|ta|ar|ur|he) ;;
-  *) die "DASHBOARD_DEFAULT_LANGUAGE não é suportado pelo Headlamp v0.43: ${DASHBOARD_DEFAULT_LANGUAGE}." ;;
+  *) die "DASHBOARD_DEFAULT_LANGUAGE não é suportado pelo Headlamp configurado: ${DASHBOARD_DEFAULT_LANGUAGE}." ;;
 esac
 [[ "${DASHBOARD_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)$ ]] \
   || die "DASHBOARD_ROLLOUT_TIMEOUT deve usar s, m ou h (ex.: 10m)."
@@ -114,7 +152,13 @@ if ! systemctl is-active --quiet "${HEADLAMP_FORWARD_SERVICE}" \
   die "DASHBOARD_LOCAL_PORT=${DASHBOARD_LOCAL_PORT} já está em uso. Escolha outra porta em cluster.env."
 fi
 
-for host in pkgs.k8s.io registry.k8s.io github.com ghcr.io; do
+if ! systemctl is-active --quiet "${GATEWAY_FORWARD_SERVICE}" \
+  && ss -H -ltn "sport = :${GATEWAY_LOCAL_PORT}" 2>/dev/null | grep -q .; then
+  ss -H -ltnp "sport = :${GATEWAY_LOCAL_PORT}" >&2 || true
+  die "GATEWAY_LOCAL_PORT=${GATEWAY_LOCAL_PORT} já está em uso. Escolha outra porta em cluster.env."
+fi
+
+for host in pkgs.k8s.io registry.k8s.io github.com ghcr.io get.helm.sh docker.io registry-1.docker.io; do
   getent ahosts "${host}" >/dev/null 2>&1 \
     || warn "não foi possível resolver ${host}; confira DNS, VPN e proxy corporativo."
 done

@@ -1,0 +1,17 @@
+# Aplique no namespace do backend. Autoriza somente HTTPRoute do namespace apps
+# a referenciar o Service backend/app; não concede acesso genérico ao namespace.
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-apps-http-route
+  namespace: backend
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: apps
+  to:
+    - group: ""
+      kind: Service
+      name: app
+

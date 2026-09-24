@@ -1,0 +1,26 @@
+# Valores enxutos para o control plane do Envoy Gateway em um notebook WSL 2.
+# Os CRDs são instalados separadamente pelo canal Standard; por isso esta
+# dependência permanece desabilitada no comando Helm.
+deployment:
+  replicas: 1
+  envoyGateway:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+service:
+  type: ClusterIP
+
+# O injetor de topologia não é necessário em um cluster local de nó único.
+topologyInjector:
+  enabled: false
+
+config:
+  envoyGateway:
+    logging:
+      level:
+        default: info

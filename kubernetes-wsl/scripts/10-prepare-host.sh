@@ -8,11 +8,11 @@ export DEBIAN_FRONTEND=noninteractive
 
 required_packages=(
   apt-transport-https ca-certificates conntrack curl ebtables ethtool gpg iproute2
-  iptables kmod openssl procps socat
+  iptables kmod openssl procps socat tar
 )
 required_command_packages=(
   curl:curl gpg:gpg ip:iproute2 iptables:iptables modprobe:kmod
-  openssl:openssl sysctl:procps
+  openssl:openssl sysctl:procps tar:tar
 )
 node_ip_unit="/etc/systemd/system/${WSL_NODE_IP_SERVICE}"
 kubelet_dropin="/etc/systemd/system/kubelet.service.d/05-k8s-wsl-node-ip.conf"

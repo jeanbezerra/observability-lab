@@ -1,0 +1,67 @@
+# Este arquivo é um template renderizado por scripts/55-install-gateway.sh.
+# Não aplique diretamente enquanto os marcadores __...__ estiverem presentes.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __GATEWAY_NAMESPACE__
+  labels:
+    app.kubernetes.io/managed-by: kubernetes-wsl
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: __ENVOY_PROXY_NAME__
+  namespace: __ENVOY_GATEWAY_NAMESPACE__
+  labels:
+    app.kubernetes.io/managed-by: kubernetes-wsl
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 1
+        container:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      envoyService:
+        # Mantém o dataplane totalmente interno. O acesso do Windows é feito
+        # somente pelo port-forward local instalado na etapa 75.
+        type: ClusterIP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: __GATEWAY_CLASS_NAME__
+  labels:
+    app.kubernetes.io/managed-by: kubernetes-wsl
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: __ENVOY_PROXY_NAME__
+    namespace: __ENVOY_GATEWAY_NAMESPACE__
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: __GATEWAY_NAME__
+  namespace: __GATEWAY_NAMESPACE__
+  labels:
+    app.kubernetes.io/managed-by: kubernetes-wsl
+spec:
+  gatewayClassName: __GATEWAY_CLASS_NAME__
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: __GATEWAY_LISTENER_PORT__
+      allowedRoutes:
+        # Permite rotas de aplicações em qualquer namespace. Referências a um
+        # backend em outro namespace ainda exigem um ReferenceGrant explícito.
+        namespaces:
+          from: All

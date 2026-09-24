@@ -1,0 +1,16 @@
+# O Service grpc-app precisa aceitar gRPC/HTTP2 na porta informada.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: app-grpc
+  namespace: default
+spec:
+  parentRefs:
+    - name: wsl-gateway
+      namespace: gateway-system
+      sectionName: http
+  rules:
+    - backendRefs:
+        - name: grpc-app
+          port: 50051
+

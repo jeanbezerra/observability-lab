@@ -26,6 +26,14 @@ kube rollout status daemonset/kube-flannel-ds -n kube-flannel --timeout=3m
 kube rollout status deployment/coredns -n kube-system --timeout=3m
 kube rollout status deployment/headlamp -n "${DASHBOARD_NAMESPACE}" --timeout=3m
 
+log "Verificando Gateway API Standard, Envoy Gateway e o acesso local sob demanda."
+bash "${SCRIPTS_DIR}/52-install-helm.sh" --check \
+  || die "Helm ${HELM_VERSION} não passou na verificação."
+bash "${SCRIPTS_DIR}/55-install-gateway.sh" --check \
+  || die "Gateway API/Envoy Gateway não passou na verificação."
+bash "${SCRIPTS_DIR}/75-configure-gateway-access.sh" --check \
+  || die "o serviço local do Gateway está ausente, exposto ou inconsistente."
+
 service_type="$(kube -n "${DASHBOARD_NAMESPACE}" get service headlamp -o jsonpath='{.spec.type}')"
 [[ "${service_type}" == "ClusterIP" ]] || die "Headlamp não está protegido por Service ClusterIP."
 [[ -z "$(kube -n "${DASHBOARD_NAMESPACE}" get service headlamp \
@@ -49,6 +57,14 @@ retry 12 5 curl -fsS --cacert /etc/kubernetes/pki/headlamp/ca.crt \
   --connect-timeout 5 "https://127.0.0.1:${DASHBOARD_LOCAL_PORT}/" -o /dev/null \
   || die "Headlamp não respondeu pelo acesso HTTPS local."
 
+gateway_access_state="fechado"
+if systemctl is-active --quiet "${GATEWAY_FORWARD_SERVICE}"; then
+  retry 12 3 curl -sS --connect-timeout 3 --max-time 5 \
+    "http://127.0.0.1:${GATEWAY_LOCAL_PORT}/" -o /dev/null \
+    || die "o túnel do Gateway está ativo, mas o Envoy não respondeu localmente."
+  gateway_access_state="aberto somente em localhost"
+fi
+
 cat <<EOF
 
 Cluster WSL 2 validado com sucesso.
@@ -56,6 +72,12 @@ Cluster WSL 2 validado com sucesso.
   Login:    automático, usando a ServiceAccount interna do laboratório
   Escopo:   somente localhost; sem UFW, OIDC, NodePort ou token manual
   CA:       $(getent passwd "${ADMIN_USER}" | cut -d: -f6)/.kube/headlamp-ca.crt
+
+Gateway API/Envoy Gateway:
+  Versões:  Gateway API ${GATEWAY_API_VERSION} Standard; Envoy Gateway ${ENVOY_GATEWAY_VERSION}
+  Classe:   ${GATEWAY_CLASS_NAME}
+  Gateway:  ${GATEWAY_NAMESPACE}/${GATEWAY_NAME}, Service ClusterIP
+  Acesso:   ${gateway_access_state} (http://localhost:${GATEWAY_LOCAL_PORT})
 
 Para remover o aviso do navegador, execute no CMD normal do Windows:
   windows\\30-trust-headlamp-ca.cmd Ubuntu-26.04

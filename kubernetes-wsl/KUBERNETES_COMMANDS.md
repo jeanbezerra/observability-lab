@@ -592,7 +592,7 @@ sudo ip address
 Uma remoção forçada apaga o objeto da API sem confirmar que o processo terminou no nó. Antes de encerrar a distribuição WSL, prefira parar os serviços de forma ordenada quando houver workloads com estado:
 
 ```bash
-sudo systemctl stop k8s-headlamp-local kubelet containerd
+sudo systemctl stop k8s-gateway-local k8s-headlamp-local kubelet containerd
 ```
 
 Depois use `wsl.exe --terminate Ubuntu-26.04` no CMD do Windows. Ao abrir novamente:
@@ -620,6 +620,73 @@ sudo kubeadm config images list
 ```
 
 Não execute `kubeadm reset` como tentativa genérica de correção: ele desmonta o estado local do cluster.
+
+## Gateway API e Envoy Gateway deste projeto
+
+Estado do controlador, classe e Gateway:
+
+```bash
+export KUBECONFIG=/etc/kubernetes/admin.conf
+
+helm list -n envoy-gateway-system
+kubectl get deployment,pod,service -n envoy-gateway-system -o wide
+kubectl get gatewayclass envoy-wsl
+kubectl get gateway wsl-gateway -n gateway-system -o wide
+kubectl describe gateway wsl-gateway -n gateway-system
+```
+
+As condições esperadas são `Accepted=True` na classe e `Programmed=True` no Gateway. O Service do dataplane precisa continuar `ClusterIP` e sem `nodePort`:
+
+```bash
+kubectl get service -A \
+  -l gateway.envoyproxy.io/owning-gateway-namespace=gateway-system,gateway.envoyproxy.io/owning-gateway-name=wsl-gateway \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{" type="}{.spec.type}{" nodePorts="}{.spec.ports[*].nodePort}{"\n"}{end}'
+```
+
+Rotas e políticas:
+
+```bash
+kubectl get httproute,grpcroute -A
+kubectl get referencegrant,backendtlspolicy -A
+kubectl get backendtrafficpolicy.gateway.envoyproxy.io -A
+
+kubectl describe httproute ROTA -n NAMESPACE
+kubectl describe grpcroute ROTA -n NAMESPACE
+kubectl describe backendtlspolicy POLITICA -n NAMESPACE
+```
+
+Valide exemplos antes de persistir:
+
+```bash
+cd ~/kubernetes-wsl/manifests/gateway/examples
+kubectl apply --dry-run=server -f http-route.yaml
+kubectl apply --dry-run=server -f grpc-route.yaml
+```
+
+Os exemplos possuem nomes ilustrativos de Services e não são aplicados pelo instalador. Edite-os primeiro. Para referências entre namespaces, crie o `ReferenceGrant` no namespace do backend.
+
+Descobrir logs do dataplane associado ao Gateway:
+
+```bash
+SELECTOR='gateway.envoyproxy.io/owning-gateway-namespace=gateway-system,gateway.envoyproxy.io/owning-gateway-name=wsl-gateway'
+kubectl get deployment,pod,service -A -l "$SELECTOR" -o wide
+
+ENVOY_NS="$(kubectl get pod -A -l "$SELECTOR" \
+  -o jsonpath='{.items[0].metadata.namespace}')"
+ENVOY_POD="$(kubectl get pod -A -l "$SELECTOR" \
+  -o jsonpath='{.items[0].metadata.name}')"
+kubectl logs -n "$ENVOY_NS" "$ENVOY_POD" --tail=200
+```
+
+Controlar o túnel do Gateway dentro do WSL:
+
+```bash
+sudo systemctl enable --now k8s-gateway-local
+curl -i http://127.0.0.1:30080/
+sudo systemctl disable --now k8s-gateway-local
+```
+
+No fluxo normal, prefira os CMD numerados `25`, `45` e `75`, que também validam o resultado no Windows.
 
 ## Dashboard Headlamp deste projeto
 

@@ -1,0 +1,16 @@
+# Extensão específica do Envoy Gateway. A política limita concorrência e fila
+# da HTTPRoute app-http; ajuste os limites a partir da capacidade do backend.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: app-http-circuit-breaker
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: app-http
+  circuitBreaker:
+    maxPendingRequests: 50
+    maxParallelRequests: 100
+

@@ -38,8 +38,11 @@ steps=(
   30-install-kubernetes.sh
   40-bootstrap-cluster.sh
   50-install-network.sh
+  52-install-helm.sh
+  55-install-gateway.sh
   60-install-dashboard.sh
   70-configure-local-access.sh
+  75-configure-gateway-access.sh
 )
 
 for step in "${steps[@]}"; do
@@ -63,3 +66,5 @@ mark_step_complete "90-verify"
 
 printf '\n\033[1;32mInstalação concluída. Abra https://localhost:%s/?lng=%s no Windows.\033[0m\n' \
   "${DASHBOARD_LOCAL_PORT}" "${DASHBOARD_DEFAULT_LANGUAGE}"
+printf '\033[1;32mGateway API pronto e fechado no Windows. Use windows\\25-open-gateway-port.cmd; destino local: http://localhost:%s.\033[0m\n' \
+  "${GATEWAY_LOCAL_PORT}"

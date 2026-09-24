@@ -2,19 +2,15 @@
 setlocal EnableExtensions
 
 rem =============================================================================
-rem Abre o acesso local do Windows ao Headlamp do cluster.
+rem Abre o acesso HTTP local do Windows ao Envoy Gateway.
 rem
-rem A abertura consiste em habilitar e iniciar, dentro do WSL, o servico systemd
-rem k8s-headlamp-local.service. Esse servico executa kubectl port-forward preso a
-rem 127.0.0.1. Nao ha UFW, Windows Firewall, netsh portproxy, NodePort ou acesso
-rem pela rede corporativa. Este script publica somente a porta 30443/TCP do
-rem Headlamp; o Gateway possui controle separado nos scripts 25 e 75.
+rem O servico k8s-gateway-local.service descobre o Service gerenciado pelo
+rem Gateway e executa kubectl port-forward preso a 127.0.0.1. Nenhuma regra de
+rem UFW ou Windows Firewall e criada; nao ha netsh portproxy, NodePort ou
+rem LoadBalancer. Use 75-close-gateway-port.cmd ao terminar.
 rem
-rem O enable torna a escolha persistente: o tunel volta no proximo boot do WSL.
-rem Para fecha-lo e impedir o inicio automatico, use 80-close-cluster-ports.cmd.
-rem
-rem Uso: 20-open-cluster-ports.cmd [DISTRIBUICAO] [PORTA]
-rem Ex.: 20-open-cluster-ports.cmd Ubuntu-26.04 30443
+rem Uso: 25-open-gateway-port.cmd [DISTRIBUICAO] [PORTA]
+rem Ex.: 25-open-gateway-port.cmd Ubuntu-26.04 30080
 rem =============================================================================
 
 if /i "%~1"=="/?" goto :help
@@ -23,8 +19,8 @@ if /i "%~1"=="--help" goto :help
 set "DISTRO=%~1"
 if not defined DISTRO set "DISTRO=Ubuntu-26.04"
 set "PORT=%~2"
-if not defined PORT set "PORT=30443"
-set "SERVICE=k8s-headlamp-local.service"
+if not defined PORT set "PORT=30080"
+set "SERVICE=k8s-gateway-local.service"
 
 set "INVALID_DISTRO="
 for /f "delims=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" %%A in ("%DISTRO%") do set "INVALID_DISTRO=1"
@@ -48,16 +44,16 @@ if errorlevel 1 (
 echo Verificando o servico "%SERVICE%" em "%DISTRO%"...
 wsl.exe -d %DISTRO% --user root -- systemctl cat --no-pager %SERVICE% >nul 2>&1
 if not "%ERRORLEVEL%"=="0" (
-  echo ERRO: o servico de encaminhamento nao foi instalado.
+  echo ERRO: o encaminhamento do Gateway ainda nao foi instalado.
   echo Execute install-all.sh dentro do Ubuntu e tente novamente.
   exit /b 1
 )
 
-echo Habilitando o encaminhamento local persistente...
+echo Habilitando o encaminhamento HTTP local persistente...
 wsl.exe -d %DISTRO% --user root -- systemctl enable --now %SERVICE%
 if not "%ERRORLEVEL%"=="0" (
   echo ERRO: systemd nao conseguiu habilitar ou iniciar "%SERVICE%".
-  echo Consulte: wsl.exe -d %DISTRO% --user root -- journalctl -u "%SERVICE%" -n 100 --no-pager
+  echo Consulte: wsl.exe -d %DISTRO% --user root -- journalctl -u %SERVICE% -n 100 --no-pager
   exit /b 1
 )
 
@@ -69,30 +65,30 @@ if not "%ERRORLEVEL%"=="0" (
 
 where.exe curl.exe >nul 2>&1
 if errorlevel 1 (
-  echo AVISO: curl.exe nao existe; o servico esta ativo, mas a URL nao foi testada.
-  echo Acesse: https://localhost:%PORT%/?lng=pt
+  echo AVISO: curl.exe nao existe; o servico esta ativo, mas o HTTP nao foi testado.
+  echo Acesse: http://localhost:%PORT%/
   exit /b 0
 )
 
-echo Aguardando https://localhost:%PORT% responder...
-for /l %%I in (1,1,15) do (
-  curl.exe --insecure --silent --output NUL --connect-timeout 1 --max-time 3 "https://localhost:%PORT%/"
+echo Aguardando http://localhost:%PORT% responder...
+for /l %%I in (1,1,20) do (
+  curl.exe --silent --output NUL --connect-timeout 1 --max-time 3 "http://localhost:%PORT%/"
   if not errorlevel 1 goto :ready
   ping.exe -n 2 127.0.0.1 >nul
 )
 
 echo ERRO: o servico esta ativo, mas localhost:%PORT% nao respondeu.
-echo Verifique localhostForwarding=true e execute 00-check-environment.cmd.
+echo Confira os logs do servico e se o Gateway aparece como Programmed=True.
 exit /b 1
 
 :ready
-echo Encaminhamento aberto com sucesso somente em https://localhost:%PORT%/.
-echo Nenhuma porta foi liberada para a LAN, VPN ou rede corporativa.
+echo Gateway acessivel somente em http://localhost:%PORT%/.
+echo Uma resposta HTTP 404 e normal enquanto nenhuma HTTPRoute estiver associada.
 exit /b 0
 
 :help
 echo Uso: %~nx0 [DISTRIBUICAO] [PORTA]
 echo.
-echo Habilita e inicia o tunel local e persistente do Headlamp.
-echo Padroes: DISTRIBUICAO=Ubuntu-26.04 e PORTA=30443.
+echo Habilita e inicia o tunel HTTP local e persistente do Envoy Gateway.
+echo Padroes: DISTRIBUICAO=Ubuntu-26.04 e PORTA=30080.
 exit /b 0

@@ -1,0 +1,16 @@
+# Exige TLS entre o Envoy e o Service https-app. O certificado do backend deve
+# ser válido para https-app.default.svc.cluster.local e usar uma CA pública.
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: https-app-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: https-app
+  validation:
+    hostname: https-app.default.svc.cluster.local
+    wellKnownCACertificates: System
+

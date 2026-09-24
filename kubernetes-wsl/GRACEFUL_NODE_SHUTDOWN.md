@@ -21,7 +21,7 @@ kubectl get events -A --sort-by='.metadata.creationTimestamp'
 Quando quiser dar ao systemd a oportunidade de parar os serviços primeiro:
 
 ```bash
-sudo systemctl stop k8s-headlamp-local.service
+sudo systemctl stop k8s-gateway-local.service k8s-headlamp-local.service
 sudo systemctl stop kubelet.service
 sudo systemctl stop containerd.service
 ```
@@ -41,7 +41,7 @@ kubectl delete pod POD -n NAMESPACE --wait=true --timeout=2m
 ## Depois de abrir novamente o Ubuntu
 
 ```bash
-systemctl is-active k8s-wsl-node-ip containerd kubelet k8s-headlamp-local
+systemctl is-active k8s-wsl-node-ip containerd kubelet k8s-headlamp-local k8s-gateway-local
 kubectl wait --for=condition=Ready node --all --timeout=5m
 kubectl get pods -A
 ```
