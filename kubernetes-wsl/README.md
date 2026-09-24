@@ -145,12 +145,17 @@ Kubernetes, Helm, manifesto do Flannel e charts do Envoy Gateway. Ele não
 contém imagens de contêiner. Portanto, o notebook ainda precisa alcançar os
 registries usados por kubeadm, Flannel, Headlamp e Envoy.
 
-Você pode copiar o projeto inteiro já com `offline-cache/`, ou importar apenas
-o `.tar.gz` pelo CMD do Windows, sem PowerShell:
+Você pode copiar o projeto inteiro já com `offline-cache/`. Como alternativa,
+o CMD abaixo baixa automaticamente do bucket S3 o `.tar.gz` e seu `.sha256`,
+valida o arquivo e o importa, sem PowerShell:
 
 ```bat
-windows\05-import-offline-bundle.cmd "C:\Temp\kubernetes-wsl-artifacts-ubuntu-26.04-v1.36-amd64.tar.gz"
+windows\05-import-offline-bundle.cmd
 ```
+
+O download fica em `dist/` e é reutilizado quando o hash publicado continua
+igual. Para um arquivo criado localmente por `prepare-offline-bundle.sh`, passe
+o caminho como argumento e mantenha o `.sha256` gerado ao lado dele.
 
 Com `ARTIFACT_MODE="auto"`, o instalador tenta a Internet e cai automaticamente
 para o cache verificado se o download falhar. Para evitar tentativas externas
