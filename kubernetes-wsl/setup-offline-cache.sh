@@ -109,9 +109,9 @@ elif [[ ! -f "${cluster_config}" ]]; then
 fi
 
 if grep -q '^ARTIFACT_MODE=' "${cluster_config}"; then
-  sed -i -E 's/^ARTIFACT_MODE=.*/ARTIFACT_MODE="cache"/' "${cluster_config}"
+  sed -i -E 's/^ARTIFACT_MODE=.*/ARTIFACT_MODE="offline"/' "${cluster_config}"
 else
-  printf '\nARTIFACT_MODE="cache"\n' >>"${cluster_config}"
+  printf '\nARTIFACT_MODE="offline"\n' >>"${cluster_config}"
 fi
 chmod 0600 "${cluster_config}" 2>/dev/null || true
 
@@ -123,6 +123,6 @@ fi
 artifact_cache_complete \
   || die "o cache instalado falhou na verificação final."
 
-log "Cache instalado e cluster.env configurado para ARTIFACT_MODE=cache."
+log "Cache instalado e cluster.env configurado para ARTIFACT_MODE=offline."
 printf '\nPróximo comando:\n  sudo bash %q %q\n' \
   "${PROJECT_DIR}/install-all.sh" "${cluster_config}"

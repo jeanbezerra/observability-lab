@@ -7,8 +7,11 @@ require_root
 export DEBIAN_FRONTEND=noninteractive
 
 kubernetes_packages=(kubelet kubeadm kubectl kubernetes-cni cri-tools)
+kubernetes_repo_file="/etc/apt/sources.list.d/kubernetes.list"
+kubernetes_repo_disabled_file="${kubernetes_repo_file}.disabled"
+kubernetes_repo_line="deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBERNETES_MINOR}/deb/ /"
 
-kubernetes_state_ok() {
+kubernetes_packages_ready() {
   local command_name package_name
   for command_name in kubelet kubeadm kubectl crictl; do
     command -v "${command_name}" >/dev/null 2>&1 || {
@@ -27,21 +30,33 @@ kubernetes_state_ok() {
       check_pending "pacote Kubernetes ausente: ${package_name}."
       return 1
     }
+  done
+}
+
+kubernetes_state_ok() {
+  local package_name
+  kubernetes_packages_ready || return 1
+  for package_name in "${kubernetes_packages[@]}"; do
     apt-mark showhold | grep -Fxq "${package_name}" || {
       check_pending "pacote ${package_name} não está marcado como hold."
       return 1
     }
   done
-  grep -Fqx \
-    "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBERNETES_MINOR}/deb/ /" \
-    /etc/apt/sources.list.d/kubernetes.list 2>/dev/null || {
-      check_pending "repositório Kubernetes ${KUBERNETES_MINOR} não está configurado."
+  if artifact_mode_is_offline; then
+    [[ ! -e "${kubernetes_repo_file}" ]] || {
+      check_pending "repositório Kubernetes remoto ainda está habilitado no modo offline."
       return 1
     }
-  [[ -r /etc/apt/keyrings/kubernetes-apt-keyring.gpg ]] || {
-    check_pending "chave do repositório Kubernetes não existe."
-    return 1
-  }
+  else
+    grep -Fqx "${kubernetes_repo_line}" "${kubernetes_repo_file}" 2>/dev/null || {
+        check_pending "repositório Kubernetes ${KUBERNETES_MINOR} não está configurado."
+        return 1
+      }
+    [[ -r /etc/apt/keyrings/kubernetes-apt-keyring.gpg ]] || {
+      check_pending "chave do repositório Kubernetes não existe."
+      return 1
+    }
+  fi
   grep -Fqx 'runtime-endpoint: unix:///run/containerd/containerd.sock' /etc/crictl.yaml 2>/dev/null || {
     check_pending "endpoint do crictl não está configurado."
     return 1
@@ -90,25 +105,43 @@ if command -v crictl >/dev/null 2>&1 \
   package_is_installed cri-tools && apt-get remove -y cri-tools
 fi
 
-log "Configurando o repositório oficial Kubernetes ${KUBERNETES_MINOR}."
-install -d -o root -g root -m 0755 /etc/apt/keyrings
-key_file="$(mktemp)"
-trap 'rm -f -- "${key_file}"' EXIT
+if artifact_mode_is_offline; then
+  if [[ -e "${kubernetes_repo_file}" ]]; then
+    mv -f -- "${kubernetes_repo_file}" "${kubernetes_repo_disabled_file}"
+    log "Repositório remoto Kubernetes desabilitado em ${kubernetes_repo_disabled_file}."
+  fi
+  log "Modo offline: a chave e o repositório pkgs.k8s.io não serão consultados."
+else
+  log "Configurando o repositório oficial Kubernetes ${KUBERNETES_MINOR}."
+  install -d -o root -g root -m 0755 /etc/apt/keyrings
+  key_file="$(mktemp)"
+  trap 'rm -f -- "${key_file}"' EXIT
 
-download_artifact \
-  "https://pkgs.k8s.io/core:/stable:/${KUBERNETES_MINOR}/deb/Release.key" \
-  "artifacts/kubernetes-${KUBERNETES_MINOR}-Release.key" "${key_file}"
-gpg --dearmor --yes --output /etc/apt/keyrings/kubernetes-apt-keyring.gpg "${key_file}"
-chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  download_artifact \
+    "https://pkgs.k8s.io/core:/stable:/${KUBERNETES_MINOR}/deb/Release.key" \
+    "artifacts/kubernetes-${KUBERNETES_MINOR}-Release.key" "${key_file}"
+  gpg --dearmor --yes --output /etc/apt/keyrings/kubernetes-apt-keyring.gpg "${key_file}"
+  chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-cat >/etc/apt/sources.list.d/kubernetes.list <<EOF
-deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBERNETES_MINOR}/deb/ /
-EOF
-chmod 0644 /etc/apt/sources.list.d/kubernetes.list
+  printf '%s\n' "${kubernetes_repo_line}" >"${kubernetes_repo_file}"
+  chmod 0644 "${kubernetes_repo_file}"
+fi
 
-apt-mark unhold "${kubernetes_packages[@]}" >/dev/null 2>&1 || true
-apt_install_with_cache kubernetes -y --reinstall --allow-change-held-packages \
-  "${kubernetes_packages[@]}"
+if kubernetes_packages_ready; then
+  log "Pacotes Kubernetes ${KUBERNETES_MINOR} já estão instalados corretamente; APT não será chamado."
+else
+  if artifact_mode_is_offline; then
+    log "Tentando concluir localmente pacotes que foram instalados manualmente com dpkg."
+    dpkg --configure -a || true
+  fi
+  if kubernetes_packages_ready; then
+    log "Pacotes manuais configurados com sucesso; APT não será chamado."
+  else
+    apt-mark unhold "${kubernetes_packages[@]}" >/dev/null 2>&1 || true
+    apt_install_with_cache kubernetes -y --reinstall --allow-change-held-packages \
+      "${kubernetes_packages[@]}"
+  fi
+fi
 apt-mark hold "${kubernetes_packages[@]}" >/dev/null
 systemctl enable kubelet
 

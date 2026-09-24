@@ -142,7 +142,11 @@ sudo bash install-all.sh cluster.env
 `setup-offline-cache.sh` faz tudo no Linux: baixa o bundle publicado pelo S3
 para `/tmp`, valida o SHA-256, extrai diretamente na pasta `offline-cache` do
 projeto, remove o download temporário e cria `cluster.env` se ele ainda não
-existir. O arquivo fica configurado com `ARTIFACT_MODE="cache"`.
+existir. O arquivo fica configurado com `ARTIFACT_MODE="offline"`. Nesse modo, os
+scripts não consultam a chave nem o repositório `pkgs.k8s.io`; se os pacotes já
+estiverem corretamente instalados por `dpkg`, a etapa Kubernetes também não chama
+o APT. Um repositório Kubernetes anteriormente habilitado é renomeado para
+`kubernetes.list.disabled`.
 
 O bundle contém pacotes `.deb` e suas dependências, chave do repositório
 Kubernetes, Helm, manifesto do Flannel e charts do Envoy Gateway. Ele não
@@ -249,7 +253,7 @@ Isso para apenas o port-forward. O Gateway e as aplicações continuam internos 
 
 ## O que é instalado
 
-- Kubernetes `v1.36` pelo repositório `pkgs.k8s.io`;
+- Kubernetes `v1.36` pelos pacotes oficiais, via `pkgs.k8s.io` ou cache local offline;
 - `containerd` e `runc` do Ubuntu, com cgroups `systemd`;
 - `kubeadm`, `kubelet`, `kubectl`, CNI plugins e `crictl`;
 - Flannel `v0.28.8`, com manifesto validado por SHA-256;
@@ -283,7 +287,7 @@ Não são instalados ou configurados: UFW, OIDC, Keycloak, Ingress NGINX, MetalL
 | `GATEWAY_NAMESPACE` / `GATEWAY_NAME` | `gateway-system` / `wsl-gateway` | Gateway HTTP base |
 | `GATEWAY_LISTENER_PORT` | `8080` | porta interna do listener/Service Envoy |
 | `GATEWAY_LOCAL_PORT` | `30080` | porta opcional em `127.0.0.1` para o Windows |
-| `ARTIFACT_MODE` | `auto` | `auto`, `online` ou `cache` para artefatos de instalação |
+| `ARTIFACT_MODE` | `auto` | `auto`, `online` ou `offline`; `cache` é alias de `offline` |
 | `ARTIFACT_CACHE_DIR` | `offline-cache` no projeto | cache local separado por arquitetura |
 | `ALLOW_LOW_RESOURCES` | `false` | permite prosseguir abaixo dos mínimos |
 | `AUTO_REPAIR_PARTIAL_CLUSTER` | `true` | repara somente bootstrap incompleto sem `admin.conf` |

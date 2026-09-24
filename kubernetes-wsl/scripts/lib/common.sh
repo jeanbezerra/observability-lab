@@ -55,6 +55,7 @@ GATEWAY_LOCAL_PORT="${GATEWAY_LOCAL_PORT:-30080}"
 # Fontes dos artefatos de instalação (pacotes, Helm, manifesto e charts).
 # As imagens de contêiner permanecem sempre externas e não fazem parte do cache.
 ARTIFACT_MODE="${ARTIFACT_MODE:-auto}"
+ARTIFACT_MODE="${ARTIFACT_MODE,,}"
 ARTIFACT_CACHE_DIR="${ARTIFACT_CACHE_DIR:-${PROJECT_DIR}/offline-cache}"
 ALLOW_UNSUPPORTED_OS="${ALLOW_UNSUPPORTED_OS:-false}"
 ALLOW_LOW_RESOURCES="${ALLOW_LOW_RESOURCES:-false}"
@@ -122,6 +123,13 @@ command_minor_version() {
 is_true() {
   case "${1,,}" in
     1|true|yes|sim|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+artifact_mode_is_offline() {
+  case "${ARTIFACT_MODE}" in
+    offline|cache) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -254,7 +262,7 @@ download_artifact() {
   local url="$1" relative_path="$2" destination="$3" expected_checksum="${4:-}"
   local downloaded=false
 
-  if [[ "${ARTIFACT_MODE}" != "cache" ]]; then
+  if ! artifact_mode_is_offline; then
     if retry 3 3 curl -fL --retry 2 --connect-timeout 15 "${url}" -o "${destination}"; then
       if [[ -z "${expected_checksum}" ]] \
         || printf '%s  %s\n' "${expected_checksum}" "${destination}" | sha256sum --check --status; then
@@ -295,7 +303,7 @@ install_cached_deb_group() {
 apt_install_with_cache() {
   local group="$1"
   shift
-  if [[ "${ARTIFACT_MODE}" != "cache" ]]; then
+  if ! artifact_mode_is_offline; then
     if apt-get update && apt-get install "$@"; then
       return 0
     fi

@@ -116,14 +116,14 @@ esac
 [[ "${DASHBOARD_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)$ ]] \
   || die "DASHBOARD_ROLLOUT_TIMEOUT deve usar s, m ou h (ex.: 10m)."
 case "${ARTIFACT_MODE}" in
-  auto|online|cache) ;;
-  *) die "ARTIFACT_MODE deve ser auto, online ou cache; recebido: ${ARTIFACT_MODE}." ;;
+  auto|online|offline|cache) ;;
+  *) die "ARTIFACT_MODE deve ser auto, online, offline ou cache; recebido: ${ARTIFACT_MODE}." ;;
 esac
-if [[ "${ARTIFACT_MODE}" == "cache" ]]; then
+if artifact_mode_is_offline; then
   require_command sha256sum
   artifact_cache_complete \
-    || die "ARTIFACT_MODE=cache exige um bundle completo e compatível em ${ARTIFACT_CACHE_DIR}."
-  log "Bundle local validado; pacotes e artefatos de instalação não usarão a Internet."
+    || die "ARTIFACT_MODE=${ARTIFACT_MODE} exige um bundle completo e compatível em ${ARTIFACT_CACHE_DIR}."
+  log "Modo offline: bundle local validado; pacotes e artefatos de instalação não usarão a Internet."
 elif artifact_cache_compatible; then
   log "Cache de contingência compatível detectado em ${ARTIFACT_CACHE_DIR}."
 fi
@@ -170,7 +170,11 @@ if ! systemctl is-active --quiet "${GATEWAY_FORWARD_SERVICE}" \
   die "GATEWAY_LOCAL_PORT=${GATEWAY_LOCAL_PORT} já está em uso. Escolha outra porta em cluster.env."
 fi
 
-for host in pkgs.k8s.io registry.k8s.io github.com ghcr.io get.helm.sh docker.io registry-1.docker.io; do
+network_hosts=(registry.k8s.io ghcr.io docker.io registry-1.docker.io)
+if ! artifact_mode_is_offline; then
+  network_hosts+=(pkgs.k8s.io github.com get.helm.sh)
+fi
+for host in "${network_hosts[@]}"; do
   getent ahosts "${host}" >/dev/null 2>&1 \
     || warn "não foi possível resolver ${host}; confira DNS, VPN e proxy corporativo."
 done

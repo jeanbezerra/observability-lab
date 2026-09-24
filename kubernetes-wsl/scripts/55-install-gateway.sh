@@ -218,7 +218,7 @@ helm_oci() {
 
 log "Baixando charts oficiais do Envoy Gateway ${ENVOY_GATEWAY_VERSION}."
 charts_downloaded=false
-if [[ "${ARTIFACT_MODE}" != "cache" ]]; then
+if ! artifact_mode_is_offline; then
   if retry 3 3 helm_oci pull oci://docker.io/envoyproxy/gateway-crds-helm \
       --version "${ENVOY_GATEWAY_VERSION}" --destination "${temporary_dir}" \
     && retry 3 3 helm_oci pull oci://docker.io/envoyproxy/gateway-helm \
