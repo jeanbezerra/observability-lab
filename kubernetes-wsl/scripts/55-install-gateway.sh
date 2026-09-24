@@ -268,8 +268,16 @@ for resource_ref in \
   fi
 done
 
-existing_chart="$(helm_local list -n "${ENVOY_GATEWAY_NAMESPACE}" \
-  --all --filter "^${ENVOY_GATEWAY_RELEASE}$" --no-headers 2>/dev/null | awk 'NR == 1 {print $(NF-1)}')"
+existing_chart=""
+# Na primeira instalação, o namespace do controller ainda não existe.
+# O Helm 4 encerra `helm list -n <namespace-ausente>` com código 1; sob
+# `set -e -o pipefail`, isso interromperia o script antes que
+# `helm upgrade --install --create-namespace` pudesse criá-lo.
+if kube get namespace "${ENVOY_GATEWAY_NAMESPACE}" >/dev/null 2>&1; then
+  existing_chart="$(helm_local list -n "${ENVOY_GATEWAY_NAMESPACE}" \
+    --all --filter "^${ENVOY_GATEWAY_RELEASE}$" --no-headers \
+    | awk 'NR == 1 {print $(NF-1)}')"
+fi
 if [[ -n "${existing_chart}" && "${existing_chart}" != gateway-helm-* ]]; then
   die "a release Helm ${ENVOY_GATEWAY_NAMESPACE}/${ENVOY_GATEWAY_RELEASE} pertence ao chart ${existing_chart}; nada foi alterado nela."
 fi
