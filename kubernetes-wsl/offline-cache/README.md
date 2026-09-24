@@ -1,7 +1,9 @@
 # Cache de contingência
 
-Esta pasta recebe bundles gerados por `prepare-offline-bundle.sh`. Os arquivos
-binários e pacotes são ignorados pelo Git; somente este README é versionado.
+Esta pasta recebe bundles gerados por
+`../offline-bundle-builder/prepare-offline-bundle.sh`. Os arquivos binários e
+pacotes são ignorados pelo Git; somente este README é versionado. Consulte
+`../offline-bundle-builder/HELP.md` para geração, validação e publicação.
 
 O cache contém:
 

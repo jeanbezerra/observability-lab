@@ -164,8 +164,9 @@ Kubernetes, Helm, manifesto do Flannel e charts do Envoy Gateway. Ele não
 contém imagens de contêiner. Portanto, o notebook ainda precisa alcançar os
 registries usados por kubeadm, Flannel, Headlamp e Envoy.
 
-Para manter ou republicar o bundle, o fluxo separado continua disponível em
-`prepare-offline-bundle.sh`; ele não é necessário no notebook corporativo.
+Para manter ou republicar o bundle, use o fluxo isolado em
+[`offline-bundle-builder/`](offline-bundle-builder/HELP.md). O gerador não é
+necessário no notebook corporativo.
 
 ### Por que `NODE_IP` é fixo
 
@@ -382,6 +383,52 @@ mostra somente campos operacionais selecionados e o fingerprint da configuraçã
 o conteúdo bruto do `cluster.env` não é copiado para o log.
 
 Consulte também [KUBERNETES_COMMANDS.md](KUBERNETES_COMMANDS.md).
+
+## Resetar o ambiente Kubernetes
+
+`uninstall-all.sh` remove somente o estado e as configurações pertencentes a
+este cluster. Antes de executar, veja o plano sem alterar o Linux:
+
+```bash
+cd ~/kubernetes-wsl
+sudo bash uninstall-all.sh cluster.env --dry-run
+```
+
+Para confirmar a limpeza:
+
+```bash
+sudo bash uninstall-all.sh cluster.env --yes
+```
+
+O script executa `kubeadm reset`, para e desabilita o kubelet e os serviços
+locais do projeto, remove o estado de etcd/kubelet/CNI/Flannel, interfaces
+`flannel.1` e `cni0`, kubeconfigs reconhecidos como cópias deste cluster e todos
+os containers, sandboxes e imagens registrados pelo CRI no containerd. A opção
+`--yes` é obrigatória; não existe confirmação interativa que possa ser aceita
+acidentalmente.
+
+São preservados todos os pacotes APT, seus holds, `containerd`, sua configuração
+geral e dados de outros namespaces, Helm, `offline-cache/`, backups e os logs de
+auditoria. Portanto, comandos como `kubeadm`, `kubectl` e `crictl` continuam
+instalados, embora não exista mais um cluster. Imagens de Docker/Rancher Desktop
+fora do namespace Kubernetes também não são tocadas.
+
+Cada execução gera um log `uninstall-AAAAMMDD-HHMMSS-PID.log` em
+`/var/log/k8s-wsl-bootstrap`; o mais recente fica disponível por:
+
+```bash
+sudo less /var/log/k8s-wsl-bootstrap/latest-uninstall.log
+```
+
+A CA eventualmente importada no Windows é deliberadamente preservada. Para
+removê-la do repositório do usuário Windows, execute separadamente
+`windows\90-untrust-headlamp-ca.cmd` no CMD.
+
+Depois do reset, o mesmo `cluster.env` pode recriar o laboratório:
+
+```bash
+sudo bash install-all.sh cluster.env
+```
 
 ## Ambiente corporativo
 

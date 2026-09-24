@@ -619,7 +619,17 @@ sudo kubeadm certs check-expiration
 sudo kubeadm config images list
 ```
 
-Não execute `kubeadm reset` como tentativa genérica de correção: ele desmonta o estado local do cluster.
+Não execute `kubeadm reset` como tentativa genérica de correção: ele desmonta o
+estado local do cluster. Quando a intenção for realmente zerar o laboratório,
+use o fluxo protegido do projeto:
+
+```bash
+sudo bash uninstall-all.sh cluster.env --dry-run
+sudo bash uninstall-all.sh cluster.env --yes
+```
+
+Esse fluxo também remove estado CNI, serviços auxiliares e imagens CRI que
+`kubeadm reset` sozinho pode deixar no host, sem desinstalar pacotes Linux.
 
 ## Gateway API e Envoy Gateway deste projeto
 

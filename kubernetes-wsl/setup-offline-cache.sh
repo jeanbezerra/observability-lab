@@ -6,8 +6,24 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT_DIR}/scripts/lib/common.sh"
 
-readonly BUNDLE_NAME="kubernetes-wsl-artifacts-ubuntu-26.04-v1.36-amd64.tar.gz"
-readonly BUNDLE_URL="https://observability-lab-177862772785-sa-east-1-an.s3.sa-east-1.amazonaws.com/${BUNDLE_NAME}"
+published_bundle_file="${ROOT_DIR}/offline-bundle-builder/published-bundle.env"
+[[ -r "${published_bundle_file}" ]] \
+  || die "metadados do bundle publicado não encontrados: ${published_bundle_file}."
+# shellcheck source=offline-bundle-builder/published-bundle.env
+source "${published_bundle_file}"
+
+: "${PUBLISHED_BUNDLE_NAME:?PUBLISHED_BUNDLE_NAME ausente em published-bundle.env}"
+: "${PUBLISHED_BUNDLE_ARCHITECTURE:?PUBLISHED_BUNDLE_ARCHITECTURE ausente em published-bundle.env}"
+: "${PUBLISHED_BUNDLE_BASE_URL:?PUBLISHED_BUNDLE_BASE_URL ausente em published-bundle.env}"
+[[ "${PUBLISHED_BUNDLE_NAME}" =~ ^[A-Za-z0-9._-]+\.tar\.gz$ ]] \
+  || die "PUBLISHED_BUNDLE_NAME contém um nome inseguro."
+[[ "${PUBLISHED_BUNDLE_ARCHITECTURE}" =~ ^(amd64|arm64)$ ]] \
+  || die "PUBLISHED_BUNDLE_ARCHITECTURE precisa ser amd64 ou arm64."
+[[ "${PUBLISHED_BUNDLE_BASE_URL}" == https://* && "${PUBLISHED_BUNDLE_BASE_URL}" != *[[:space:]]* ]] \
+  || die "PUBLISHED_BUNDLE_BASE_URL precisa ser uma URL HTTPS sem espaços."
+
+readonly BUNDLE_NAME="${PUBLISHED_BUNDLE_NAME}"
+readonly BUNDLE_URL="${PUBLISHED_BUNDLE_BASE_URL%/}/${BUNDLE_NAME}"
 readonly CHECKSUM_URL="${BUNDLE_URL}.sha256"
 
 usage() {
@@ -36,8 +52,8 @@ require_command sha256sum
 require_command tar
 
 architecture="$(artifact_arch)" || die "arquitetura não suportada: $(uname -m)."
-[[ "${architecture}" == "amd64" ]] \
-  || die "o bundle publicado é amd64, mas este Ubuntu usa ${architecture}."
+[[ "${architecture}" == "${PUBLISHED_BUNDLE_ARCHITECTURE}" ]] \
+  || die "o bundle publicado é ${PUBLISHED_BUNDLE_ARCHITECTURE}, mas este Ubuntu usa ${architecture}."
 
 cache_parent="$(realpath -m -- "${ARTIFACT_CACHE_DIR}")"
 cache_root="${cache_parent}/${architecture}"

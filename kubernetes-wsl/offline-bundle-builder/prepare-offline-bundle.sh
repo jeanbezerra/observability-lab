@@ -2,17 +2,32 @@
 
 set -Eeuo pipefail
 
-ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BUILDER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "${BUILDER_DIR}/.." && pwd)"
+
+# O builder usa os padrões versionados do projeto, nunca o cluster.env local.
+# bundle.env é opcional e permite preparar antecipadamente uma nova matriz de
+# versões/checksums sem alterar a configuração do cluster em execução.
+# shellcheck source=/dev/null
+source "${PROJECT_ROOT}/.env.example"
+if [[ -r "${BUILDER_DIR}/bundle.env" ]]; then
+  K8S_CONFIG_FILE="${BUILDER_DIR}/bundle.env"
+else
+  K8S_CONFIG_FILE="/dev/null"
+fi
+export K8S_CONFIG_FILE
 # shellcheck source=scripts/lib/common.sh
-source "${ROOT_DIR}/scripts/lib/common.sh"
+source "${PROJECT_ROOT}/scripts/lib/common.sh"
+
+BUNDLE_OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${BUILDER_DIR}/dist}"
 
 usage() {
   cat <<EOF
 Uso: sudo bash $0 [--force]
 
-Baixa os artefatos de instalação para offline-cache/ e gera um .tar.gz em
-dist/. O bundle inclui pacotes .deb, chave Kubernetes, Helm, Flannel e charts
-do Envoy Gateway. Imagens de contêiner não são incluídas.
+Baixa os artefatos de instalação para ${ARTIFACT_CACHE_DIR}/ e gera um .tar.gz
+em ${BUNDLE_OUTPUT_DIR}/. O bundle inclui pacotes .deb, chave Kubernetes, Helm,
+Flannel e charts do Envoy Gateway. Imagens de contêiner não são incluídas.
 
 --force  substitui somente o cache da arquitetura atual, se ele já existir
 EOF
@@ -188,18 +203,21 @@ for directory in apt/host apt/containerd apt/kubernetes artifacts charts; do
 done
 is_true "${artifact_cache_complete_staging}" || die "a validação interna do bundle falhou."
 
-install -d -m 0755 "${cache_parent}" "${ROOT_DIR}/dist"
+output_dir="$(realpath -m -- "${BUNDLE_OUTPUT_DIR}")"
+[[ "${output_dir}" == /* && "${output_dir}" != "/" ]] \
+  || die "diretório de saída inseguro: ${output_dir}."
+install -d -m 0755 "${cache_parent}" "${output_dir}"
 if [[ -e "${cache_root}" ]]; then
   rm -rf -- "${cache_root}"
 fi
 mv -- "${staging_root}" "${cache_root}"
 
 archive_name="kubernetes-wsl-artifacts-ubuntu-26.04-${KUBERNETES_MINOR}-${architecture}.tar.gz"
-archive_path="${ROOT_DIR}/dist/${archive_name}"
+archive_path="${output_dir}/${archive_name}"
 tar -C "${cache_parent}" -czf "${archive_path}" "${architecture}"
-(cd -- "${ROOT_DIR}/dist" && sha256sum -- "${archive_name}" >"${archive_name}.sha256")
+(cd -- "${output_dir}" && sha256sum -- "${archive_name}" >"${archive_name}.sha256")
 
-project_owner="$(stat -c '%u:%g' "${ROOT_DIR}")"
+project_owner="$(stat -c '%u:%g' "${PROJECT_ROOT}")"
 chown -R "${project_owner}" "${cache_root}" "${archive_path}" "${archive_path}.sha256" 2>/dev/null || true
 
 log "Bundle criado sem imagens de contêiner."
