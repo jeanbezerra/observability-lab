@@ -75,13 +75,19 @@ case "${architecture}" in
 esac
 
 log "Baixando chave do Kubernetes, Helm e manifesto do Flannel."
-retry 3 3 curl -fL --retry 2 --connect-timeout 15 \
+retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+  curl -fL --retry 4 --retry-delay 5 \
+  --connect-timeout "${ARTIFACT_CONNECT_TIMEOUT_SECONDS}" \
   "https://pkgs.k8s.io/core:/stable:/${KUBERNETES_MINOR}/deb/Release.key" \
   -o "${kubernetes_key}"
-retry 3 3 curl -fL --retry 2 --connect-timeout 15 \
+retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+  curl -fL --retry 4 --retry-delay 5 \
+  --connect-timeout "${ARTIFACT_CONNECT_TIMEOUT_SECONDS}" \
   "https://get.helm.sh/helm-v${version_without_prefix}-linux-${architecture}.tar.gz" \
   -o "${helm_archive}"
-retry 3 3 curl -fL --retry 2 --connect-timeout 15 \
+retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+  curl -fL --retry 4 --retry-delay 5 \
+  --connect-timeout "${ARTIFACT_CONNECT_TIMEOUT_SECONDS}" \
   "https://github.com/flannel-io/flannel/releases/download/${FLANNEL_VERSION}/kube-flannel.yml" \
   -o "${flannel_manifest}"
 printf '%s  %s\n' "${helm_checksum}" "${helm_archive}" | sha256sum --check --status \

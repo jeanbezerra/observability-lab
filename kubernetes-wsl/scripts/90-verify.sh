@@ -6,6 +6,10 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 require_root
 require_command curl
 
+networking_mode="$(wsl_networking_mode)" || die "não foi possível identificar a rede do WSL."
+[[ "${networking_mode}" == "mirrored" ]] \
+  || die "a rede do WSL mudou para ${networking_mode}; esperado: mirrored."
+
 log "Verificando serviços systemd do WSL e do Kubernetes."
 systemd_is_pid1 || die "systemd não é o PID 1."
 for service_name in "${WSL_NODE_IP_SERVICE}" containerd kubelet "${HEADLAMP_FORWARD_SERVICE}"; do
@@ -21,10 +25,13 @@ grep -Eq '^[[:space:]]*swapBehavior:[[:space:]]*NoSwap[[:space:]]*$' /var/lib/ku
   || die "Pods não estão protegidos pela política NoSwap."
 
 log "Aguardando nó, Flannel, DNS e Headlamp."
-kube wait --for=condition=Ready nodes --all --timeout=5m
-kube rollout status daemonset/kube-flannel-ds -n kube-flannel --timeout=3m
-kube rollout status deployment/coredns -n kube-system --timeout=3m
-kube rollout status deployment/headlamp -n "${DASHBOARD_NAMESPACE}" --timeout=3m
+kube wait --for=condition=Ready nodes --all --timeout="${CLUSTER_OPERATION_TIMEOUT}"
+kube rollout status daemonset/kube-flannel-ds -n kube-flannel \
+  --timeout="${CLUSTER_OPERATION_TIMEOUT}"
+kube rollout status deployment/coredns -n kube-system \
+  --timeout="${CLUSTER_OPERATION_TIMEOUT}"
+kube rollout status deployment/headlamp -n "${DASHBOARD_NAMESPACE}" \
+  --timeout="${CLUSTER_OPERATION_TIMEOUT}"
 
 log "Verificando Gateway API Standard, Envoy Gateway e o acesso local sob demanda."
 bash "${SCRIPTS_DIR}/52-install-helm.sh" --check \
@@ -53,13 +60,18 @@ grep -Fxq "127.0.0.1:${DASHBOARD_LOCAL_PORT}" <<<"${listeners}" \
 grep -Fvxq "127.0.0.1:${DASHBOARD_LOCAL_PORT}" <<<"${listeners}" \
   && die "Headlamp está exposto fora da interface local."
 
-retry 12 5 curl -fsS --cacert /etc/kubernetes/pki/headlamp/ca.crt \
-  --connect-timeout 5 "https://127.0.0.1:${DASHBOARD_LOCAL_PORT}/" -o /dev/null \
+retry_for "${CLUSTER_OPERATION_TIMEOUT}" 10 curl -fsS \
+  --cacert /etc/kubernetes/pki/headlamp/ca.crt \
+  --connect-timeout "${KUBERNETES_REQUEST_TIMEOUT_SECONDS}" \
+  --max-time "${KUBERNETES_REQUEST_TIMEOUT_SECONDS}" \
+  "https://127.0.0.1:${DASHBOARD_LOCAL_PORT}/" -o /dev/null \
   || die "Headlamp não respondeu pelo acesso HTTPS local."
 
 gateway_access_state="fechado"
 if systemctl is-active --quiet "${GATEWAY_FORWARD_SERVICE}"; then
-  retry 12 3 curl -sS --connect-timeout 3 --max-time 5 \
+  retry_for "${CLUSTER_OPERATION_TIMEOUT}" 10 curl -sS \
+    --connect-timeout "${KUBERNETES_REQUEST_TIMEOUT_SECONDS}" \
+    --max-time "${KUBERNETES_REQUEST_TIMEOUT_SECONDS}" \
     "http://127.0.0.1:${GATEWAY_LOCAL_PORT}/" -o /dev/null \
     || die "o túnel do Gateway está ativo, mas o Envoy não respondeu localmente."
   gateway_access_state="aberto somente em localhost"
@@ -68,6 +80,7 @@ fi
 cat <<EOF
 
 Cluster WSL 2 validado com sucesso.
+  Rede WSL:  mirrored, com acessos publicados somente em 127.0.0.1
   Headlamp: https://localhost:${DASHBOARD_LOCAL_PORT}/?lng=${DASHBOARD_DEFAULT_LANGUAGE}
   Login:    automático, usando a ServiceAccount interna do laboratório
   Escopo:   somente localhost; sem UFW, OIDC, NodePort ou token manual

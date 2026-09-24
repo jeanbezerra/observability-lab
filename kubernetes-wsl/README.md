@@ -2,6 +2,7 @@
 
 Esta pasta cria um cluster Kubernetes de nó único dentro do **WSL 2 com Ubuntu 26.04**, usando `kubeadm`, `containerd`, Flannel, Headlamp, Gateway API e Envoy Gateway. A variante foi desenhada para um notebook corporativo:
 
+- usa a rede `mirrored` do WSL 2 para melhor compatibilidade com VPN, DNS e proxy corporativos;
 - não instala, ativa ou configura UFW;
 - não usa OIDC, Keycloak ou arquivo de secrets;
 - não exige colar tokens no Headlamp;
@@ -18,7 +19,7 @@ O `sudo` dentro do Ubuntu continua necessário para instalar pacotes e executar 
 navegador no Windows
   https://localhost:30443
            |
-           | encaminhamento localhost nativo do WSL 2
+           | loopback bidirecional da rede mirrored do WSL 2
            v
 systemd: kubectl port-forward --address=127.0.0.1
            |
@@ -57,7 +58,10 @@ wsl.exe --version
 wsl.exe --list --verbose
 ```
 
-A distribuição precisa aparecer com `VERSION 2`. Se o WSL ou o Ubuntu 26.04 ainda não existirem, os comandos abaixo normalmente exigem um CMD executado como Administrador e podem ser bloqueados pela política corporativa:
+A distribuição precisa aparecer com `VERSION 2`. A rede mirrored requer Windows 11
+22H2 ou superior e uma versão atual do WSL. Se o WSL ou o Ubuntu 26.04 ainda não
+existirem, os comandos abaixo normalmente exigem um CMD executado como Administrador
+e podem ser bloqueados pela política corporativa:
 
 ```bat
 wsl.exe --update
@@ -69,16 +73,23 @@ Se a política impedir esses comandos, solicite à TI apenas a habilitação do 
 
 Feche Rancher Desktop, Docker Desktop ou outro Kubernetes local antes do bootstrap. Distribuições WSL podem compartilhar portas, e o preflight interrompe com diagnóstico se `6443` já estiver ocupada.
 
-### Recursos opcionais
+### Rede mirrored e recursos
 
-O arquivo [windows/.wslconfig.example](windows/.wslconfig.example) traz uma configuração de referência. Copiá-lo para `%UserProfile%\.wslconfig` afeta **todas** as distribuições WSL 2 do usuário:
+O arquivo [windows/.wslconfig.example](windows/.wslconfig.example) habilita
+`networkingMode=mirrored`, DNS tunneling, proxy automático e tempos maiores para
+detectar o proxy corporativo. `hostAddressLoopback` permanece desativado e nenhuma
+porta é ignorada. Copiá-lo para `%UserProfile%\.wslconfig` afeta **todas** as
+distribuições WSL 2 do usuário:
 
 ```bat
 copy windows\.wslconfig.example "%UserProfile%\.wslconfig"
-wsl.exe --shutdown
+windows\05-apply-mirrored-network.cmd Ubuntu-26.04
 ```
 
-Revise memória e CPUs antes de copiar. O mínimo validado é 2 CPUs, 2 GB de RAM e 10 GB livres; 4 CPUs e 6 GB de RAM deixam o laboratório mais confortável.
+O script usa `wsl.exe --shutdown` porque `networkingMode` é global; salve o trabalho
+de todas as distribuições antes de executá-lo. Ele não usa PowerShell e não altera
+firewall. Revise memória e CPUs antes de copiar. O mínimo validado é 2 CPUs, 2 GB
+de RAM e 10 GB livres; 4 CPUs e 6 GB de RAM deixam o laboratório mais confortável.
 
 ## 2. Habilitar systemd no Ubuntu
 
@@ -158,7 +169,11 @@ Para manter ou republicar o bundle, o fluxo separado continua disponível em
 
 ### Por que `NODE_IP` é fixo
 
-O IPv4 NAT da distribuição WSL muda após encerramentos. A automação cria `10.254.254.1/32` na interface loopback por meio de systemd e usa esse endereço no kubelet e no API Server. Assim, `wsl.exe --shutdown`, reinícios do Windows e mudanças de VPN não invalidam o cluster.
+No modo mirrored, as interfaces do Windows são refletidas no Linux e os endereços
+podem mudar com DHCP, Wi-Fi e VPN. A automação não usa esses endereços mutáveis como
+identidade do nó: cria `10.254.254.1/32` na interface loopback por meio de systemd e
+usa esse endereço somente dentro do WSL no kubelet e no API Server. Assim,
+`wsl.exe --shutdown`, reinícios do Windows e mudanças de VPN não invalidam o cluster.
 
 Se `10.254.254.1` conflitar com VPN ou rede corporativa, escolha outro IPv4 privado em `cluster.env` **antes da primeira instalação**. `NODE_IP`, `NODE_NAME`, `POD_NETWORK_CIDR` e `SERVICE_CIDR` são tratados como imutáveis depois do bootstrap.
 
@@ -276,10 +291,17 @@ Não são instalados ou configurados: UFW, OIDC, Keycloak, Ingress NGINX, MetalL
 | `NODE_IP` | `10.254.254.1` | endereço estável interno criado em `lo` |
 | `NODE_NAME` | `kubernetes-wsl` | nome fixo do nó |
 | `ADMIN_USER` | usuário que chamou `sudo` | recebe `~/.kube/config` e a CA pública |
+| `CLUSTER_OPERATION_TIMEOUT` | `20m` | espera de rollouts, CRDs, rede, Gateway e acessos locais |
+| `KUBEADM_INIT_TIMEOUT` | `20m` | espera interna e externa da etapa 40/control plane |
+| `KUBERNETES_REQUEST_TIMEOUT_SECONDS` | `30` | limite de cada consulta curta à API/CRI |
+| `ARTIFACT_CONNECT_TIMEOUT_SECONDS` | `60` | limite para estabelecer conexões de download |
+| `ARTIFACT_RETRY_ATTEMPTS` | `6` | tentativas de download e pull de imagem |
+| `ARTIFACT_RETRY_DELAY_SECONDS` | `10` | intervalo entre tentativas de artefatos |
 | `POD_NETWORK_CIDR` | `10.244.0.0/16` | rede Flannel |
 | `SERVICE_CIDR` | `10.96.0.0/12` | rede dos Services |
 | `DASHBOARD_LOCAL_PORT` | `30443` | porta local do Windows/WSL |
 | `DASHBOARD_DEFAULT_LANGUAGE` | `pt` | idioma do link do Headlamp |
+| `DASHBOARD_ROLLOUT_TIMEOUT` | `20m` | espera específica pelo Headlamp |
 | `HELM_VERSION` | `v4.3.0` | versão reproduzível usada para os charts OCI |
 | `GATEWAY_API_VERSION` | `v1.6.1` | bundle Standard compatível com o Envoy Gateway fixado |
 | `ENVOY_GATEWAY_VERSION` | `v1.9.1` | release estável do controlador e dataplane |
@@ -339,7 +361,8 @@ Consulte também [KUBERNETES_COMMANDS.md](KUBERNETES_COMMANDS.md).
 
 ## Ambiente corporativo
 
-- VPN e proxy: o WSL atual pode herdar proxy e DNS do Windows. Se downloads de pacotes falharem, o bundle local pode assumir automaticamente; imagens continuam exigindo os registries.
+- Rede mirrored: Windows e WSL usam `localhost` bidirecional, enquanto DNS tunneling, `autoProxy` e `bestEffortDnsParsing` melhoram a compatibilidade com VPN e resolução corporativa.
+- VPN e proxy: se downloads de pacotes falharem, o bundle local pode assumir automaticamente; imagens continuam exigindo os registries.
 - Cache local: gere-o em Ubuntu 26.04 da mesma arquitetura. Refaça o bundle ao mudar Kubernetes, Helm, Flannel ou Envoy Gateway; não versione os binários no Git.
 - Proxy autenticado: prefira configuração corporativa de APT e variáveis de ambiente fornecidas pela TI; não versione credenciais em `cluster.env`.
 - Política de execução: os scripts Windows são `.cmd`, não usam PowerShell e controlam o túnel por `wsl.exe`/systemd.
@@ -347,6 +370,23 @@ Consulte também [KUBERNETES_COMMANDS.md](KUBERNETES_COMMANDS.md).
 - Exposição remota: deliberadamente não suportada. Headlamp e Gateway são alcançados do Windows apenas por túneis locais independentes.
 
 ## Diagnóstico
+
+### A etapa 40 demorou ou foi interrompida
+
+Não execute `kubeadm reset` manualmente. Reexecute o instalador; a etapa 40 espera
+até `KUBEADM_INIT_TIMEOUT`, preserva um control plane que ainda responda e só
+repara automaticamente um bootstrap comprovadamente parcial:
+
+```bash
+sudo bash install-all.sh cluster.env
+```
+
+Se ainda falhar, consulte o log mantido pelo instalador e o kubelet:
+
+```bash
+sudo tail -n 200 /var/lib/k8s-wsl-bootstrap/kubeadm-init.log
+sudo journalctl -u kubelet -n 200 --no-pager
+```
 
 ### systemd não é PID 1
 

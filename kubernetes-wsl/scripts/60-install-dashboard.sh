@@ -108,25 +108,30 @@ dashboard_diagnostics() {
 }
 
 wait_for_headlamp() {
-  local elapsed=0 interval=10 timeout_seconds
+  local elapsed=0 interval=10 timeout_seconds started_at
   timeout_seconds="$(duration_to_seconds "${DASHBOARD_ROLLOUT_TIMEOUT}")" || return 1
+  started_at="${SECONDS}"
   while (( elapsed < timeout_seconds )); do
     if kube -n "${DASHBOARD_NAMESPACE}" rollout status deployment/headlamp \
-      --timeout=5s >/dev/null 2>&1; then
+      --timeout="${KUBERNETES_REQUEST_TIMEOUT_SECONDS}s" >/dev/null 2>&1; then
       return 0
     fi
+    elapsed=$((SECONDS - started_at))
+    (( elapsed < timeout_seconds )) || break
     log "Aguardando o Headlamp ficar pronto (${elapsed}s/${timeout_seconds}s)."
     sleep "${interval}"
-    elapsed=$((elapsed + interval + 5))
+    elapsed=$((SECONDS - started_at))
   done
   return 1
 }
 
 pull_dashboard_image() {
   if command -v crictl >/dev/null 2>&1; then
-    retry 3 5 crictl --runtime-endpoint=unix:///run/containerd/containerd.sock pull "${HEADLAMP_IMAGE}"
+    retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+      crictl --runtime-endpoint=unix:///run/containerd/containerd.sock pull "${HEADLAMP_IMAGE}"
   else
-    retry 3 5 ctr --namespace k8s.io images pull "${HEADLAMP_IMAGE}"
+    retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+      ctr --namespace k8s.io images pull "${HEADLAMP_IMAGE}"
   fi
 }
 

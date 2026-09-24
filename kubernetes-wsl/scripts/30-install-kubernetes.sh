@@ -61,6 +61,10 @@ kubernetes_state_ok() {
     check_pending "endpoint do crictl não está configurado."
     return 1
   }
+  grep -Fqx "timeout: ${KUBERNETES_REQUEST_TIMEOUT_SECONDS}" /etc/crictl.yaml 2>/dev/null || {
+    check_pending "timeout do crictl não corresponde a ${KUBERNETES_REQUEST_TIMEOUT_SECONDS}s."
+    return 1
+  }
   [[ "$(stat -c '%U:%G:%a' /etc/crictl.yaml 2>/dev/null)" == "root:root:644" ]] || {
     check_pending "permissões de /etc/crictl.yaml estão incorretas."
     return 1
@@ -82,7 +86,8 @@ for command_name in kubelet kubeadm kubectl; do
   if command -v "${command_name}" >/dev/null 2>&1 \
     && [[ "$(command_minor_version "${command_name}")" != "${KUBERNETES_MINOR}" ]]; then
     if [[ -r "${KUBECONFIG_ADMIN}" ]] \
-      && kubectl --kubeconfig "${KUBECONFIG_ADMIN}" --request-timeout=5s get --raw=/readyz >/dev/null 2>&1; then
+      && kubectl --kubeconfig "${KUBECONFIG_ADMIN}" \
+        --request-timeout="${KUBERNETES_REQUEST_TIMEOUT_SECONDS}s" get --raw=/readyz >/dev/null 2>&1; then
       die "${command_name} pertence a outro minor em um cluster ativo. Faça o upgrade Kubernetes de forma controlada antes de mudar KUBERNETES_MINOR para ${KUBERNETES_MINOR}."
     fi
     warn "instalação Kubernetes incompleta e incompatível detectada; os pacotes serão reinstalados pelo canal ${KUBERNETES_MINOR}."
@@ -145,10 +150,10 @@ fi
 apt-mark hold "${kubernetes_packages[@]}" >/dev/null
 systemctl enable kubelet
 
-cat >/etc/crictl.yaml <<'EOF'
+cat >/etc/crictl.yaml <<EOF
 runtime-endpoint: unix:///run/containerd/containerd.sock
 image-endpoint: unix:///run/containerd/containerd.sock
-timeout: 10
+timeout: ${KUBERNETES_REQUEST_TIMEOUT_SECONDS}
 debug: false
 EOF
 chmod 0644 /etc/crictl.yaml

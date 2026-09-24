@@ -13,7 +13,14 @@ kubernetes_version="$(kubeadm version -o short)"
 
 api_server_ready() {
   [[ -r "${KUBECONFIG_ADMIN}" ]] \
-    && kube --request-timeout=5s get --raw=/readyz >/dev/null 2>&1
+    && kube --request-timeout="${KUBERNETES_REQUEST_TIMEOUT_SECONDS}s" \
+      get --raw=/readyz >/dev/null 2>&1
+}
+
+partial_api_responds() {
+  curl -ksS --connect-timeout "${KUBERNETES_REQUEST_TIMEOUT_SECONDS}" \
+    --max-time "${KUBERNETES_REQUEST_TIMEOUT_SECONDS}" \
+    -o /dev/null "https://${node_ip}:6443/readyz"
 }
 
 kubelet_settings_ok() {
@@ -91,6 +98,14 @@ nodeRegistration:
   kubeletExtraArgs:
     - name: node-ip
       value: "${node_ip}"
+timeouts:
+  controlPlaneComponentHealthCheck: "${KUBEADM_INIT_TIMEOUT}"
+  discovery: "${KUBEADM_INIT_TIMEOUT}"
+  etcdAPICall: "${KUBEADM_INIT_TIMEOUT}"
+  kubeletHealthCheck: "${KUBEADM_INIT_TIMEOUT}"
+  kubernetesAPICall: "${KUBEADM_INIT_TIMEOUT}"
+  tlsBootstrap: "${KUBEADM_INIT_TIMEOUT}"
+  upgradeManifests: "${KUBEADM_INIT_TIMEOUT}"
 ---
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
@@ -135,7 +150,7 @@ if [[ -r "${KUBECONFIG_ADMIN}" ]]; then
     warn "API Server não respondeu; reiniciando containerd e kubelet uma vez."
     systemctl restart containerd
     systemctl restart kubelet
-    if ! retry 20 3 api_server_ready; then
+    if ! retry_for "${KUBEADM_INIT_TIMEOUT}" 10 api_server_ready; then
       systemctl --no-pager --full status containerd kubelet >&2 || true
       journalctl -u kubelet --no-pager -n 100 >&2 || true
       die "o cluster existente não voltou; ele foi preservado e kubeadm reset não foi executado."
@@ -151,8 +166,7 @@ else
   if is_true "${partial_cluster}"; then
     is_true "${AUTO_REPAIR_PARTIAL_CLUSTER}" \
       || die "há resíduos de kubeadm init. Ative AUTO_REPAIR_PARTIAL_CLUSTER=true para reparar esse estado parcial."
-    if retry 5 3 curl -ksS --connect-timeout 3 --max-time 5 \
-      -o /dev/null "https://${node_ip}:6443/readyz"; then
+    if retry_for "${CLUSTER_OPERATION_TIMEOUT}" 10 partial_api_responds; then
       die "a API responde sem admin.conf; o instalador não resetará um control plane possivelmente ativo."
     fi
     warn "estado parcial sem admin.conf detectado; salvando /etc/kubernetes antes do reset controlado."
@@ -169,13 +183,16 @@ else
   trap 'rm -f -- "${kubeadm_config}"' EXIT
   render_kubeadm_config >"${kubeadm_config}"
   chmod 0600 "${kubeadm_config}"
+  kubeadm config validate --config "${kubeadm_config}" \
+    || die "a configuração gerada para o kubeadm não passou na validação local."
   log "Inicializando o control plane ${node_name} no endereço estável ${node_ip}."
   kubeadm init --config "${kubeadm_config}" \
     | tee "${BOOTSTRAP_STATE_DIR}/kubeadm-init.log"
   chmod 0600 "${BOOTSTRAP_STATE_DIR}/kubeadm-init.log"
 fi
 
-retry 20 3 kube get --raw=/readyz >/dev/null || die "API Server não ficou pronto."
+retry_for "${KUBEADM_INIT_TIMEOUT}" 10 api_server_ready \
+  || die "API Server não ficou pronto dentro de ${KUBEADM_INIT_TIMEOUT}."
 
 primary_group="$(id -gn "${ADMIN_USER}")"
 admin_home="$(getent passwd "${ADMIN_USER}" | cut -d: -f6)"

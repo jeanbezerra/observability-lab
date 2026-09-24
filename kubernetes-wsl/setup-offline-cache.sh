@@ -61,11 +61,15 @@ archive="${download_dir}/${BUNDLE_NAME}"
 checksum_file="${archive}.sha256"
 
 log "Baixando o checksum do bundle."
-retry 3 3 curl -fL --retry 2 --connect-timeout 15 \
+retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+  curl -fL --retry 4 --retry-delay 5 \
+  --connect-timeout "${ARTIFACT_CONNECT_TIMEOUT_SECONDS}" \
   "${CHECKSUM_URL}" -o "${checksum_file}"
 
 log "Baixando o bundle de aproximadamente 191 MiB diretamente para uma área temporária."
-retry 3 3 curl -fL --retry 2 --connect-timeout 15 \
+retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+  curl -fL --retry 4 --retry-delay 5 \
+  --connect-timeout "${ARTIFACT_CONNECT_TIMEOUT_SECONDS}" \
   "${BUNDLE_URL}" -o "${archive}"
 
 (cd -- "${download_dir}" && sha256sum --check "$(basename -- "${checksum_file}")") \

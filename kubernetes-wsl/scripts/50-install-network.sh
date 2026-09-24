@@ -15,7 +15,8 @@ flannel_subnet_file_ok() {
 
 network_state_ok() {
   local desired ready updated images network_config coredns_desired coredns_ready
-  kube --request-timeout=5s -n kube-flannel get daemonset kube-flannel-ds >/dev/null 2>&1 || {
+  kube --request-timeout="${KUBERNETES_REQUEST_TIMEOUT_SECONDS}s" \
+    -n kube-flannel get daemonset kube-flannel-ds >/dev/null 2>&1 || {
     check_pending "DaemonSet do Flannel não existe."
     return 1
   }
@@ -80,14 +81,16 @@ if is_true "${restart_flannel}"; then
   warn "estado local do Flannel está incompleto; reiniciando o DaemonSet para recriar /run/flannel/subnet.env."
   kube rollout restart daemonset/kube-flannel-ds -n kube-flannel
 fi
-kube rollout status daemonset/kube-flannel-ds -n kube-flannel --timeout=5m
-if ! retry 30 2 flannel_subnet_file_ok; then
+kube rollout status daemonset/kube-flannel-ds -n kube-flannel \
+  --timeout="${CLUSTER_OPERATION_TIMEOUT}"
+if ! retry_for "${CLUSTER_OPERATION_TIMEOUT}" 10 flannel_subnet_file_ok; then
   kube -n kube-flannel get daemonset,pod -o wide >&2 || true
   kube -n kube-flannel logs daemonset/kube-flannel-ds \
     --all-containers=true --prefix --tail=100 >&2 || true
   die "Flannel ficou pronto na API, mas não criou /run/flannel/subnet.env no nó."
 fi
-kube rollout status deployment/coredns -n kube-system --timeout=5m
+kube rollout status deployment/coredns -n kube-system \
+  --timeout="${CLUSTER_OPERATION_TIMEOUT}"
 
 network_state_ok || die "a rede foi aplicada, mas Flannel/CoreDNS ainda não atingiram o estado esperado."
 log "Rede de Pods instalada."

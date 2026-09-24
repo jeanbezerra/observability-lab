@@ -49,7 +49,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [1/7] Verificando a distribuicao "%DISTRO%"...
+echo [1/8] Verificando a distribuicao "%DISTRO%"...
 wsl.exe -d %DISTRO% --user root -- test -r /etc/os-release >nul 2>&1
 if not "%ERRORLEVEL%"=="0" (
   echo ERRO: a distribuicao "%DISTRO%" nao existe ou nao pode ser iniciada.
@@ -57,7 +57,7 @@ if not "%ERRORLEVEL%"=="0" (
   exit /b 1
 )
 
-echo [2/7] Verificando se "%DISTRO%" usa WSL 2...
+echo [2/8] Verificando se "%DISTRO%" usa WSL 2...
 wsl.exe -d %DISTRO% --user root -- grep -qi "WSL2" /proc/sys/kernel/osrelease
 if not "%ERRORLEVEL%"=="0" (
   echo ERRO: "%DISTRO%" nao foi identificada como WSL 2.
@@ -65,7 +65,22 @@ if not "%ERRORLEVEL%"=="0" (
   exit /b 1
 )
 
-echo [3/7] Verificando systemd como PID 1 em "%DISTRO%"...
+echo [3/8] Verificando a rede mirrored em "%DISTRO%"...
+set "NETWORK_MODE="
+for /f "delims=" %%M in ('wsl.exe -d %DISTRO% --user root -- wslinfo --networking-mode 2^>nul') do set "NETWORK_MODE=%%M"
+if not defined NETWORK_MODE (
+  echo ERRO: wslinfo nao informou o modo de rede. Atualize pelo CMD com: wsl.exe --update
+  exit /b 1
+)
+if /i not "%NETWORK_MODE%"=="mirrored" (
+  echo ERRO: modo de rede detectado: "%NETWORK_MODE%". Era esperado "mirrored".
+  echo Copie windows\.wslconfig.example para %%UserProfile%%\.wslconfig
+  echo e execute 05-apply-mirrored-network.cmd.
+  exit /b 1
+)
+echo OK: WSL esta usando networkingMode=mirrored.
+
+echo [4/8] Verificando systemd como PID 1 em "%DISTRO%"...
 wsl.exe -d %DISTRO% --user root -- grep -qxi "systemd" /proc/1/comm
 if not "%ERRORLEVEL%"=="0" (
   echo ERRO: systemd nao esta ativo como PID 1 em "%DISTRO%".
@@ -73,7 +88,7 @@ if not "%ERRORLEVEL%"=="0" (
   exit /b 1
 )
 
-echo [4/7] Verificando o encaminhamento do Headlamp em "%DISTRO%"...
+echo [5/8] Verificando o encaminhamento do Headlamp em "%DISTRO%"...
 wsl.exe -d %DISTRO% --user root -- systemctl cat --no-pager %HEADLAMP_SERVICE% >nul 2>&1
 if not "%ERRORLEVEL%"=="0" (
   echo ERRO: o servico "%HEADLAMP_SERVICE%" ainda nao foi instalado.
@@ -88,7 +103,7 @@ if not "%ERRORLEVEL%"=="0" (
   echo OK: o encaminhamento do Headlamp esta ativo no WSL.
 )
 
-echo [5/7] Verificando o encaminhamento do Envoy Gateway em "%DISTRO%"...
+echo [6/8] Verificando o encaminhamento do Envoy Gateway em "%DISTRO%"...
 wsl.exe -d %DISTRO% --user root -- systemctl cat --no-pager %GATEWAY_SERVICE% >nul 2>&1
 if not "%ERRORLEVEL%"=="0" (
   echo ERRO: o servico "%GATEWAY_SERVICE%" ainda nao foi instalado.
@@ -103,7 +118,7 @@ if not "%ERRORLEVEL%"=="0" (
   echo OK: o encaminhamento do Gateway esta ativo no WSL.
 )
 
-echo [6/7] Verificando https://localhost:%PORT% no Windows...
+echo [7/8] Verificando https://localhost:%PORT% no Windows...
 where.exe curl.exe >nul 2>&1
 if errorlevel 1 (
   echo AVISO: curl.exe nao existe; as verificacoes HTTP foram ignoradas.
@@ -117,7 +132,7 @@ if errorlevel 1 (
   echo OK: Headlamp respondeu somente pelo endereco local configurado.
 )
 
-echo [7/7] Verificando http://localhost:%GATEWAY_PORT% no Windows...
+echo [8/8] Verificando http://localhost:%GATEWAY_PORT% no Windows...
 curl.exe --silent --output NUL --connect-timeout 2 --max-time 4 "http://localhost:%GATEWAY_PORT%/"
 if errorlevel 1 (
   echo INFO: a porta TCP %GATEWAY_PORT% nao esta respondendo no localhost do Windows.
@@ -130,6 +145,6 @@ exit /b 0
 :help
 echo Uso: %~nx0 [DISTRIBUICAO] [PORTA_HEADLAMP] [PORTA_GATEWAY]
 echo.
-echo Faz verificacoes somente leitura de WSL 2, systemd, Headlamp e Gateway.
+echo Faz verificacoes somente leitura de WSL 2 mirrored, systemd, Headlamp e Gateway.
 echo Padroes: DISTRIBUICAO=Ubuntu-26.04, HEADLAMP=30443 e GATEWAY=30080.
 exit /b 0

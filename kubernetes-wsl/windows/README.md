@@ -13,6 +13,12 @@ Ambos usam `kubectl port-forward --address=127.0.0.1`. Os scripts não criam reg
 
 ## Sequência recomendada
 
+Depois de revisar e salvar `%UserProfile%\.wslconfig`, aplique a rede mirrored:
+
+```bat
+05-apply-mirrored-network.cmd Ubuntu-26.04
+```
+
 Verifique tudo:
 
 ```bat
@@ -46,7 +52,9 @@ A CA do Headlamp pode permanecer confiável com as portas fechadas. Para removê
 
 ### `00-check-environment.cmd`
 
-Faz somente leitura. Confirma que a distribuição existe, usa WSL 2 e iniciou com systemd; verifica se as duas unidades de encaminhamento foram instaladas; informa se estão ativas; testa as duas URLs quando `curl.exe` existe.
+Faz somente leitura. Confirma que a distribuição existe, usa WSL 2 com rede
+`mirrored` e iniciou com systemd; verifica se as duas unidades de encaminhamento
+foram instaladas; informa se estão ativas; testa as duas URLs quando `curl.exe` existe.
 
 ```bat
 00-check-environment.cmd [DISTRIBUICAO] [PORTA_HEADLAMP] [PORTA_GATEWAY]
@@ -54,9 +62,25 @@ Faz somente leitura. Confirma que a distribuição existe, usa WSL 2 e iniciou c
 
 Padrões: `Ubuntu-26.04`, `30443` e `30080`. Consultar uma distribuição parada pode iniciá-la, comportamento normal de `wsl.exe`, mas o script não inicia nem encerra os túneis.
 
+### `05-apply-mirrored-network.cmd`
+
+Aplica uma `.wslconfig` já salva executando `wsl.exe --shutdown`, aguarda a VM
+global recarregar, inicia a distribuição indicada e confirma o resultado com
+`wslinfo --networking-mode`. Como `.wslconfig` é global, o comando encerra todas
+as distribuições WSL e pede confirmação antes de continuar.
+
+```bat
+05-apply-mirrored-network.cmd [DISTRIBUICAO]
+```
+
+Padrão: `Ubuntu-26.04`. O script não copia ou sobrescreve `.wslconfig`, não usa
+PowerShell e não modifica Windows Firewall, Hyper-V Firewall ou UFW.
+
 ### `10-restart-wsl.cmd`
 
-Encerra somente a distribuição indicada com `wsl.exe --terminate` e a inicia novamente. Use depois de mudar `/etc/wsl.conf` ou `%UserProfile%\.wslconfig`.
+Encerra somente a distribuição indicada com `wsl.exe --terminate` e a inicia
+novamente. Use depois de mudar `/etc/wsl.conf`. Para aplicar `.wslconfig`, use o
+script `05`, pois a rede é uma configuração global da VM WSL.
 
 ```bat
 10-restart-wsl.cmd [DISTRIBUICAO]
@@ -146,11 +170,16 @@ Não fecha portas nem apaga certificados no Linux. Use ao desativar o laboratór
 
 ## `.wslconfig.example`
 
-O arquivo limita CPU, memória e swap e mantém `localhostForwarding=true` em modo NAT. Revise os valores: `%UserProfile%\.wslconfig` afeta todas as distribuições WSL 2 do usuário.
+O arquivo limita CPU, memória e swap e seleciona `networkingMode=mirrored`. Também
+mantém DNS tunneling e proxy automático, aumenta a espera inicial do proxy e deixa
+`hostAddressLoopback=false`; portanto, este projeto continua publicando apenas os
+túneis explicitamente presos a `127.0.0.1`. `localhostForwarding` não é incluído
+porque o WSL ignora essa opção em modo mirrored. Revise os valores:
+`%UserProfile%\.wslconfig` afeta todas as distribuições WSL 2 do usuário.
 
 ```bat
 copy .wslconfig.example "%UserProfile%\.wslconfig"
-10-restart-wsl.cmd Ubuntu-26.04
+05-apply-mirrored-network.cmd Ubuntu-26.04
 ```
 
 ## Privilégios e segurança de parâmetros
@@ -185,8 +214,10 @@ Se o serviço estiver ativo no WSL e a URL não responder no Windows, confirme e
 
 ```ini
 [wsl2]
-localhostForwarding=true
-networkingMode=nat
+networkingMode=mirrored
+dnsTunneling=true
+autoProxy=true
 ```
 
-Depois reinicie apenas a distribuição e reabra o túnel necessário.
+Depois execute `05-apply-mirrored-network.cmd`, valide com
+`00-check-environment.cmd` e reabra somente o túnel necessário.

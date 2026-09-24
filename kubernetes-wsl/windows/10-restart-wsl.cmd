@@ -4,7 +4,8 @@ setlocal EnableExtensions
 rem =============================================================================
 rem Reinicia somente a distribuicao WSL informada.
 rem
-rem Use depois de alterar /etc/wsl.conf ou %UserProfile%\.wslconfig. O comando
+rem Use depois de alterar /etc/wsl.conf. Para mudancas globais em .wslconfig,
+rem use 05-apply-mirrored-network.cmd, que reinicia a VM WSL completa. Este comando
 rem termina a VM da distribuicao e a inicia novamente; nenhuma regra de firewall
 rem ou configuracao do Windows e alterada.
 rem
@@ -60,5 +61,6 @@ exit /b 0
 echo Uso: %~nx0 [DISTRIBUICAO]
 echo.
 echo Encerra e inicia novamente apenas a distribuicao indicada.
+echo Para aplicar .wslconfig, use 05-apply-mirrored-network.cmd.
 echo Padrao: DISTRIBUICAO=Ubuntu-26.04.
 exit /b 0

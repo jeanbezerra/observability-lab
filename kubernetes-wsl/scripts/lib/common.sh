@@ -34,7 +34,14 @@ DASHBOARD_LOCAL_PORT="${DASHBOARD_LOCAL_PORT:-30443}"
 DASHBOARD_CERT_DAYS="${DASHBOARD_CERT_DAYS:-825}"
 DASHBOARD_DEFAULT_LANGUAGE="${DASHBOARD_DEFAULT_LANGUAGE:-pt}"
 HEADLAMP_IMAGE="${HEADLAMP_IMAGE:-ghcr.io/headlamp-k8s/headlamp:v0.45.0}"
-DASHBOARD_ROLLOUT_TIMEOUT="${DASHBOARD_ROLLOUT_TIMEOUT:-10m}"
+# Tempos conservadores para notebooks corporativos com CPU, disco e rede lentos.
+CLUSTER_OPERATION_TIMEOUT="${CLUSTER_OPERATION_TIMEOUT:-20m}"
+KUBEADM_INIT_TIMEOUT="${KUBEADM_INIT_TIMEOUT:-20m}"
+KUBERNETES_REQUEST_TIMEOUT_SECONDS="${KUBERNETES_REQUEST_TIMEOUT_SECONDS:-30}"
+DASHBOARD_ROLLOUT_TIMEOUT="${DASHBOARD_ROLLOUT_TIMEOUT:-20m}"
+ARTIFACT_CONNECT_TIMEOUT_SECONDS="${ARTIFACT_CONNECT_TIMEOUT_SECONDS:-60}"
+ARTIFACT_RETRY_ATTEMPTS="${ARTIFACT_RETRY_ATTEMPTS:-6}"
+ARTIFACT_RETRY_DELAY_SECONDS="${ARTIFACT_RETRY_DELAY_SECONDS:-10}"
 FLANNEL_VERSION="${FLANNEL_VERSION:-v0.28.8}"
 FLANNEL_SHA256="${FLANNEL_SHA256:-4148e659a834b51fc9aadc429281c6e80c97e0e25475faacd4cc857dbd16f21b}"
 HELM_VERSION="${HELM_VERSION:-v4.3.0}"
@@ -136,6 +143,11 @@ artifact_mode_is_offline() {
 
 is_wsl2() {
   grep -Eqi 'microsoft-standard-WSL2|WSL2' /proc/sys/kernel/osrelease /proc/version 2>/dev/null
+}
+
+wsl_networking_mode() {
+  command -v wslinfo >/dev/null 2>&1 || return 1
+  wslinfo --networking-mode 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'
 }
 
 systemd_is_pid1() {
@@ -263,7 +275,9 @@ download_artifact() {
   local downloaded=false
 
   if ! artifact_mode_is_offline; then
-    if retry 3 3 curl -fL --retry 2 --connect-timeout 15 "${url}" -o "${destination}"; then
+    if retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+      curl -fL --retry 4 --retry-delay 5 \
+      --connect-timeout "${ARTIFACT_CONNECT_TIMEOUT_SECONDS}" "${url}" -o "${destination}"; then
       if [[ -z "${expected_checksum}" ]] \
         || printf '%s  %s\n' "${expected_checksum}" "${destination}" | sha256sum --check --status; then
         downloaded=true
@@ -344,6 +358,10 @@ desired_state_fingerprint() {
     "GATEWAY_NAME=${GATEWAY_NAME}" \
     "GATEWAY_LISTENER_PORT=${GATEWAY_LISTENER_PORT}" \
     "GATEWAY_LOCAL_PORT=${GATEWAY_LOCAL_PORT}" \
+    "CLUSTER_OPERATION_TIMEOUT=${CLUSTER_OPERATION_TIMEOUT}" \
+    "KUBEADM_INIT_TIMEOUT=${KUBEADM_INIT_TIMEOUT}" \
+    "KUBERNETES_REQUEST_TIMEOUT_SECONDS=${KUBERNETES_REQUEST_TIMEOUT_SECONDS}" \
+    "DASHBOARD_ROLLOUT_TIMEOUT=${DASHBOARD_ROLLOUT_TIMEOUT}" \
     | sha256sum | awk '{print $1}'
 }
 
@@ -387,6 +405,23 @@ duration_to_seconds() {
     h) printf '%s\n' "$((value * 3600))" ;;
     *) return 1 ;;
   esac
+}
+
+retry_for() {
+  local duration="$1" delay="$2" timeout_seconds started_at elapsed attempt=1
+  shift 2
+  timeout_seconds="$(duration_to_seconds "${duration}")" \
+    || die "duração inválida para retry_for: ${duration}."
+  started_at="${SECONDS}"
+  until "$@"; do
+    elapsed=$((SECONDS - started_at))
+    if (( elapsed + delay >= timeout_seconds )); then
+      return 1
+    fi
+    warn "tentativa ${attempt} falhou após ${elapsed}s; tentando novamente em ${delay}s (limite ${duration})."
+    sleep "${delay}"
+    ((attempt++))
+  done
 }
 
 on_error() {

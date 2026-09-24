@@ -219,9 +219,11 @@ helm_oci() {
 log "Baixando charts oficiais do Envoy Gateway ${ENVOY_GATEWAY_VERSION}."
 charts_downloaded=false
 if ! artifact_mode_is_offline; then
-  if retry 3 3 helm_oci pull oci://docker.io/envoyproxy/gateway-crds-helm \
+  if retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+      helm_oci pull oci://docker.io/envoyproxy/gateway-crds-helm \
       --version "${ENVOY_GATEWAY_VERSION}" --destination "${temporary_dir}" \
-    && retry 3 3 helm_oci pull oci://docker.io/envoyproxy/gateway-helm \
+    && retry "${ARTIFACT_RETRY_ATTEMPTS}" "${ARTIFACT_RETRY_DELAY_SECONDS}" \
+      helm_oci pull oci://docker.io/envoyproxy/gateway-helm \
       --version "${ENVOY_GATEWAY_VERSION}" --destination "${temporary_dir}" \
     && printf '%s  %s\n' "${ENVOY_GATEWAY_CRDS_CHART_SHA256}" "${crds_chart}" \
       | sha256sum --check --status \
@@ -262,7 +264,8 @@ for crd_name in \
   backendtlspolicies.gateway.networking.k8s.io \
   envoyproxies.gateway.envoyproxy.io \
   backendtrafficpolicies.gateway.envoyproxy.io; do
-  kube wait --for=condition=Established "crd/${crd_name}" --timeout=2m
+  kube wait --for=condition=Established "crd/${crd_name}" \
+    --timeout="${CLUSTER_OPERATION_TIMEOUT}"
 done
 
 for resource_ref in \
@@ -308,7 +311,7 @@ helm_local upgrade --install "${ENVOY_GATEWAY_RELEASE}" "${gateway_chart}" \
   --create-namespace \
   --set crds.enabled=false \
   --values "${PROJECT_DIR}/manifests/gateway/envoy-gateway-values.yaml" \
-  --wait --timeout 10m
+  --wait --timeout "${CLUSTER_OPERATION_TIMEOUT}"
 
 sed \
   -e "s|__ENVOY_GATEWAY_NAMESPACE__|${ENVOY_GATEWAY_NAMESPACE}|g" \
@@ -321,16 +324,18 @@ sed \
 
 log "Criando GatewayClass ${GATEWAY_CLASS_NAME} e Gateway HTTP interno ${GATEWAY_NAMESPACE}/${GATEWAY_NAME}."
 kube apply --server-side --field-manager=kubernetes-wsl-gateway -f "${rendered_base}"
-kube wait --for=condition=Accepted "gatewayclass/${GATEWAY_CLASS_NAME}" --timeout=10m
+kube wait --for=condition=Accepted "gatewayclass/${GATEWAY_CLASS_NAME}" \
+  --timeout="${CLUSTER_OPERATION_TIMEOUT}"
 kube -n "${GATEWAY_NAMESPACE}" wait --for=condition=Programmed \
-  "gateway/${GATEWAY_NAME}" --timeout=10m
+  "gateway/${GATEWAY_NAME}" --timeout="${CLUSTER_OPERATION_TIMEOUT}"
 
 if deployment_record="$(managed_deployment_record)"; then
   IFS='|' read -r deployment_namespace deployment_name _ _ <<<"${deployment_record}"
-  kube -n "${deployment_namespace}" rollout status "deployment/${deployment_name}" --timeout=10m
+  kube -n "${deployment_namespace}" rollout status "deployment/${deployment_name}" \
+    --timeout="${CLUSTER_OPERATION_TIMEOUT}"
 fi
 
-retry 30 3 gateway_state_ok || {
+retry_for "${CLUSTER_OPERATION_TIMEOUT}" 10 gateway_state_ok || {
   kube get gatewayclass "${GATEWAY_CLASS_NAME}" -o yaml >&2 || true
   kube -n "${GATEWAY_NAMESPACE}" describe gateway "${GATEWAY_NAME}" >&2 || true
   kube get deployment,pod,service -A \

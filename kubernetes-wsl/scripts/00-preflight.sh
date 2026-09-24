@@ -7,6 +7,11 @@ require_root
 log "Validando Ubuntu 26.04, WSL 2, systemd e a configuração local."
 
 is_wsl2 || die "este instalador é exclusivo para WSL 2; nenhuma VM Linux WSL 2 foi detectada."
+require_command wslinfo
+networking_mode="$(wsl_networking_mode)" \
+  || die "não foi possível identificar a rede do WSL; atualize o WSL pelo CMD com 'wsl.exe --update'."
+[[ "${networking_mode}" == "mirrored" ]] \
+  || die "este perfil exige networkingMode=mirrored; detectado: ${networking_mode:-desconhecido}. Copie windows/.wslconfig.example para %UserProfile%\\.wslconfig e execute windows\\05-apply-mirrored-network.cmd no CMD."
 systemd_is_pid1 \
   || die "systemd não é o PID 1. Execute 'sudo bash prepare-wsl.sh', depois 'wsl.exe --terminate Ubuntu-26.04' no CMD e abra o Ubuntu novamente."
 system_state="$(systemctl is-system-running 2>/dev/null || true)"
@@ -115,6 +120,17 @@ case "${DASHBOARD_DEFAULT_LANGUAGE}" in
 esac
 [[ "${DASHBOARD_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)$ ]] \
   || die "DASHBOARD_ROLLOUT_TIMEOUT deve usar s, m ou h (ex.: 10m)."
+for timeout_name in CLUSTER_OPERATION_TIMEOUT KUBEADM_INIT_TIMEOUT; do
+  timeout_value="${!timeout_name}"
+  [[ "${timeout_value}" =~ ^[0-9]+(s|m|h)$ ]] \
+    || die "${timeout_name} deve usar s, m ou h (ex.: 20m)."
+done
+for seconds_name in KUBERNETES_REQUEST_TIMEOUT_SECONDS ARTIFACT_CONNECT_TIMEOUT_SECONDS \
+  ARTIFACT_RETRY_ATTEMPTS ARTIFACT_RETRY_DELAY_SECONDS; do
+  seconds_value="${!seconds_name}"
+  [[ "${seconds_value}" =~ ^[1-9][0-9]*$ ]] \
+    || die "${seconds_name} deve ser um inteiro positivo; recebido: ${seconds_value}."
+done
 case "${ARTIFACT_MODE}" in
   auto|online|offline|cache) ;;
   *) die "ARTIFACT_MODE deve ser auto, online, offline ou cache; recebido: ${ARTIFACT_MODE}." ;;
@@ -179,4 +195,4 @@ for host in "${network_hosts[@]}"; do
     || warn "não foi possível resolver ${host}; confira DNS, VPN e proxy corporativo."
 done
 
-log "WSL 2 aprovado: ${cpu_count} CPUs, $((memory_kib / 1024)) MiB RAM, nó ${NODE_NAME} (${NODE_IP})."
+log "WSL 2 mirrored aprovado: ${cpu_count} CPUs, $((memory_kib / 1024)) MiB RAM, nó ${NODE_NAME} (${NODE_IP})."

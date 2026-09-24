@@ -90,6 +90,6 @@ else
   systemctl start "${HEADLAMP_FORWARD_SERVICE}"
 fi
 
-retry 15 2 local_access_state_ok \
+retry_for "${CLUSTER_OPERATION_TIMEOUT}" 10 local_access_state_ok \
   || { journalctl -u "${HEADLAMP_FORWARD_SERVICE}" -n 100 --no-pager >&2 || true; die "o acesso local do Headlamp não iniciou."; }
 log "Headlamp publicado somente em https://127.0.0.1:${DASHBOARD_LOCAL_PORT}."

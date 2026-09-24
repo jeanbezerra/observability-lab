@@ -82,7 +82,7 @@ for /l %%I in (1,1,15) do (
 )
 
 echo ERRO: o servico esta ativo, mas localhost:%PORT% nao respondeu.
-echo Verifique localhostForwarding=true e execute 00-check-environment.cmd.
+echo Confirme networkingMode=mirrored com 00-check-environment.cmd.
 exit /b 1
 
 :ready

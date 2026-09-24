@@ -2,7 +2,11 @@
 processors=4
 memory=6GB
 swap=2GB
-localhostForwarding=true
-networkingMode=nat
+networkingMode=mirrored
 dnsTunneling=true
 autoProxy=true
+
+[experimental]
+bestEffortDnsParsing=true
+initialAutoProxyTimeout=10000
+hostAddressLoopback=false
