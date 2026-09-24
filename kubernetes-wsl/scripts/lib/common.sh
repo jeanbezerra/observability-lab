@@ -52,6 +52,10 @@ GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-gateway-system}"
 GATEWAY_NAME="${GATEWAY_NAME:-wsl-gateway}"
 GATEWAY_LISTENER_PORT="${GATEWAY_LISTENER_PORT:-8080}"
 GATEWAY_LOCAL_PORT="${GATEWAY_LOCAL_PORT:-30080}"
+# Fontes dos artefatos de instalação (pacotes, Helm, manifesto e charts).
+# As imagens de contêiner permanecem sempre externas e não fazem parte do cache.
+ARTIFACT_MODE="${ARTIFACT_MODE:-auto}"
+ARTIFACT_CACHE_DIR="${ARTIFACT_CACHE_DIR:-${PROJECT_DIR}/offline-cache}"
 ALLOW_UNSUPPORTED_OS="${ALLOW_UNSUPPORTED_OS:-false}"
 ALLOW_LOW_RESOURCES="${ALLOW_LOW_RESOURCES:-false}"
 AUTO_REPAIR_PARTIAL_CLUSTER="${AUTO_REPAIR_PARTIAL_CLUSTER:-true}"
@@ -60,8 +64,9 @@ BOOTSTRAP_STATE_DIR="${BOOTSTRAP_STATE_DIR:-/var/lib/k8s-wsl-bootstrap}"
 WSL_NODE_IP_SERVICE="${WSL_NODE_IP_SERVICE:-k8s-wsl-node-ip.service}"
 HEADLAMP_FORWARD_SERVICE="${HEADLAMP_FORWARD_SERVICE:-k8s-headlamp-local.service}"
 GATEWAY_FORWARD_SERVICE="${GATEWAY_FORWARD_SERVICE:-k8s-gateway-local.service}"
+OFFLINE_CACHE_FORMAT_VERSION="1"
 
-readonly LIB_DIR SCRIPTS_DIR PROJECT_DIR
+readonly LIB_DIR SCRIPTS_DIR PROJECT_DIR OFFLINE_CACHE_FORMAT_VERSION
 
 log() {
   printf '\033[1;34m[%s]\033[0m %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -177,6 +182,129 @@ effective_node_name() {
 
 kube() {
   kubectl --kubeconfig "${KUBECONFIG_ADMIN}" "$@"
+}
+
+artifact_arch() {
+  case "$(uname -m)" in
+    x86_64) printf 'amd64\n' ;;
+    aarch64) printf 'arm64\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+artifact_cache_root() {
+  local architecture
+  architecture="$(artifact_arch)" || return 1
+  printf '%s/%s\n' "${ARTIFACT_CACHE_DIR%/}" "${architecture}"
+}
+
+artifact_cache_compatible() {
+  local cache_root metadata architecture
+  architecture="$(artifact_arch)" || return 1
+  cache_root="$(artifact_cache_root)" || return 1
+  metadata="${cache_root}/bundle.env"
+  [[ -r "${metadata}" ]] || return 1
+  grep -Fqx "CACHE_FORMAT=${OFFLINE_CACHE_FORMAT_VERSION}" "${metadata}" \
+    && grep -Fqx 'UBUNTU_VERSION=26.04' "${metadata}" \
+    && grep -Fqx "ARCHITECTURE=${architecture}" "${metadata}" \
+    && grep -Fqx "KUBERNETES_MINOR=${KUBERNETES_MINOR}" "${metadata}" \
+    && grep -Fqx "FLANNEL_VERSION=${FLANNEL_VERSION}" "${metadata}" \
+    && grep -Fqx "HELM_VERSION=${HELM_VERSION}" "${metadata}" \
+    && grep -Fqx "GATEWAY_API_VERSION=${GATEWAY_API_VERSION}" "${metadata}" \
+    && grep -Fqx "ENVOY_GATEWAY_VERSION=${ENVOY_GATEWAY_VERSION}" "${metadata}"
+}
+
+verify_cache_directory() {
+  local directory="$1"
+  [[ -d "${directory}" && -s "${directory}/SHA256SUMS" ]] || return 1
+  (cd -- "${directory}" && sha256sum --check --quiet SHA256SUMS)
+}
+
+artifact_cache_complete() {
+  local cache_root relative_directory
+  artifact_cache_compatible || return 1
+  cache_root="$(artifact_cache_root)" || return 1
+  for relative_directory in apt/host apt/containerd apt/kubernetes artifacts charts; do
+    verify_cache_directory "${cache_root}/${relative_directory}" || return 1
+  done
+}
+
+copy_cached_artifact() {
+  local relative_path="$1" destination="$2" expected_checksum="${3:-}"
+  local cache_root source directory
+  [[ "${relative_path}" != /* && "${relative_path}" != *'..'* ]] \
+    || die "caminho relativo inválido no cache: ${relative_path}."
+  artifact_cache_compatible \
+    || die "cache local ausente ou incompatível em ${ARTIFACT_CACHE_DIR}; gere novamente o bundle."
+  cache_root="$(artifact_cache_root)"
+  source="${cache_root}/${relative_path}"
+  directory="$(dirname -- "${source}")"
+  verify_cache_directory "${directory}" \
+    || die "checksum do cache local falhou em ${directory}."
+  [[ -r "${source}" ]] || die "artefato ausente no cache: ${relative_path}."
+  if [[ -n "${expected_checksum}" ]]; then
+    printf '%s  %s\n' "${expected_checksum}" "${source}" | sha256sum --check --status \
+      || die "checksum fixado não confere para o cache ${relative_path}."
+  fi
+  cp -- "${source}" "${destination}"
+  log "Usando artefato local verificado: ${relative_path}."
+}
+
+download_artifact() {
+  local url="$1" relative_path="$2" destination="$3" expected_checksum="${4:-}"
+  local downloaded=false
+
+  if [[ "${ARTIFACT_MODE}" != "cache" ]]; then
+    if retry 3 3 curl -fL --retry 2 --connect-timeout 15 "${url}" -o "${destination}"; then
+      if [[ -z "${expected_checksum}" ]] \
+        || printf '%s  %s\n' "${expected_checksum}" "${destination}" | sha256sum --check --status; then
+        downloaded=true
+      else
+        warn "o download direto de ${url} chegou com checksum inesperado."
+      fi
+    else
+      warn "o download direto de ${url} falhou."
+    fi
+  fi
+
+  if is_true "${downloaded}"; then
+    return 0
+  fi
+  if [[ "${ARTIFACT_MODE}" == "online" ]]; then
+    die "não foi possível baixar ${url} e ARTIFACT_MODE=online proíbe o cache local."
+  fi
+  copy_cached_artifact "${relative_path}" "${destination}" "${expected_checksum}"
+}
+
+install_cached_deb_group() {
+  local group="$1" cache_root directory
+  local deb_files=()
+  artifact_cache_compatible \
+    || die "cache local ausente ou incompatível em ${ARTIFACT_CACHE_DIR}; gere novamente o bundle."
+  cache_root="$(artifact_cache_root)"
+  directory="${cache_root}/apt/${group}"
+  verify_cache_directory "${directory}" \
+    || die "pacotes .deb do grupo ${group} estão ausentes ou corrompidos."
+  mapfile -t deb_files < <(find "${directory}" -maxdepth 1 -type f -name '*.deb' -print | sort)
+  (( ${#deb_files[@]} > 0 )) || die "nenhum pacote .deb encontrado no grupo ${group}."
+  log "Instalando o grupo ${group} pelo cache local verificado."
+  apt-get install -y --no-download --no-install-recommends \
+    --allow-change-held-packages --reinstall "${deb_files[@]}"
+}
+
+apt_install_with_cache() {
+  local group="$1"
+  shift
+  if [[ "${ARTIFACT_MODE}" != "cache" ]]; then
+    if apt-get update && apt-get install "$@"; then
+      return 0
+    fi
+    if [[ "${ARTIFACT_MODE}" == "online" ]]; then
+      die "instalação APT do grupo ${group} falhou e ARTIFACT_MODE=online proíbe o cache local."
+    fi
+    warn "instalação APT online do grupo ${group} falhou; usando a contingência local."
+  fi
+  install_cached_deb_group "${group}"
 }
 
 ensure_state_dir() {

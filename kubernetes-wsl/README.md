@@ -125,6 +125,38 @@ Não existe `oidc-secrets.env`. Para a instalação padrão, não é necessário
 
 O instalador é reconciliador: ao ser executado novamente, verifica cada etapa antes de alterá-la. Um cluster que já tenha `/etc/kubernetes/admin.conf` nunca é resetado automaticamente. O reparo com `kubeadm reset` é limitado a um bootstrap parcial sem `admin.conf`, após backup de `/etc/kubernetes`.
 
+### Contingência para downloads bloqueados
+
+Em outra instalação Ubuntu 26.04 com Internet e com a mesma arquitetura do
+notebook corporativo, prepare o cache:
+
+```bash
+cd ~/kubernetes-wsl
+sudo bash prepare-offline-bundle.sh
+```
+
+O comando popula `offline-cache/amd64` (ou `arm64`) e cria em `dist/` um
+arquivo como `kubernetes-wsl-artifacts-ubuntu-26.04-v1.36-amd64.tar.gz`, junto
+com seu SHA-256. Use `--force` somente para substituir um cache anterior da
+mesma arquitetura.
+
+O bundle contém pacotes `.deb` e suas dependências, chave do repositório
+Kubernetes, Helm, manifesto do Flannel e charts do Envoy Gateway. Ele não
+contém imagens de contêiner. Portanto, o notebook ainda precisa alcançar os
+registries usados por kubeadm, Flannel, Headlamp e Envoy.
+
+Você pode copiar o projeto inteiro já com `offline-cache/`, ou importar apenas
+o `.tar.gz` pelo CMD do Windows, sem PowerShell:
+
+```bat
+windows\05-import-offline-bundle.cmd "C:\Temp\kubernetes-wsl-artifacts-ubuntu-26.04-v1.36-amd64.tar.gz"
+```
+
+Com `ARTIFACT_MODE="auto"`, o instalador tenta a Internet e cai automaticamente
+para o cache verificado se o download falhar. Para evitar tentativas externas
+de pacotes e artefatos, use `ARTIFACT_MODE="cache"` em `cluster.env`. Os hashes,
+arquitetura, Ubuntu e versões são conferidos antes do uso.
+
 ### Por que `NODE_IP` é fixo
 
 O IPv4 NAT da distribuição WSL muda após encerramentos. A automação cria `10.254.254.1/32` na interface loopback por meio de systemd e usa esse endereço no kubelet e no API Server. Assim, `wsl.exe --shutdown`, reinícios do Windows e mudanças de VPN não invalidam o cluster.
@@ -256,6 +288,8 @@ Não são instalados ou configurados: UFW, OIDC, Keycloak, Ingress NGINX, MetalL
 | `GATEWAY_NAMESPACE` / `GATEWAY_NAME` | `gateway-system` / `wsl-gateway` | Gateway HTTP base |
 | `GATEWAY_LISTENER_PORT` | `8080` | porta interna do listener/Service Envoy |
 | `GATEWAY_LOCAL_PORT` | `30080` | porta opcional em `127.0.0.1` para o Windows |
+| `ARTIFACT_MODE` | `auto` | `auto`, `online` ou `cache` para artefatos de instalação |
+| `ARTIFACT_CACHE_DIR` | `offline-cache` no projeto | cache local separado por arquitetura |
 | `ALLOW_LOW_RESOURCES` | `false` | permite prosseguir abaixo dos mínimos |
 | `AUTO_REPAIR_PARTIAL_CLUSTER` | `true` | repara somente bootstrap incompleto sem `admin.conf` |
 
@@ -306,7 +340,8 @@ Consulte também [KUBERNETES_COMMANDS.md](KUBERNETES_COMMANDS.md).
 
 ## Ambiente corporativo
 
-- VPN e proxy: o WSL atual pode herdar proxy e DNS do Windows. Se downloads falharem, valide `pkgs.k8s.io`, `get.helm.sh`, `docker.io` e `registry-1.docker.io`; os charts e as imagens do Envoy vêm do Docker Hub.
+- VPN e proxy: o WSL atual pode herdar proxy e DNS do Windows. Se downloads de pacotes falharem, o bundle local pode assumir automaticamente; imagens continuam exigindo os registries.
+- Cache local: gere-o em Ubuntu 26.04 da mesma arquitetura. Refaça o bundle ao mudar Kubernetes, Helm, Flannel ou Envoy Gateway; não versione os binários no Git.
 - Proxy autenticado: prefira configuração corporativa de APT e variáveis de ambiente fornecidas pela TI; não versione credenciais em `cluster.env`.
 - Política de execução: os scripts Windows são `.cmd`, não usam PowerShell e controlam o túnel por `wsl.exe`/systemd.
 - Firewall: esta pasta não chama `ufw`, `netsh advfirewall` ou APIs do Windows Firewall.

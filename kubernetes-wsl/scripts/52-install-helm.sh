@@ -53,7 +53,8 @@ version_without_prefix="${HELM_VERSION#v}"
 download_url="https://get.helm.sh/helm-v${version_without_prefix}-linux-${helm_arch}.tar.gz"
 
 log "Baixando Helm ${HELM_VERSION} para linux/${helm_arch} com verificação SHA-256."
-retry 3 3 curl -fL --retry 2 --connect-timeout 15 "${download_url}" -o "${archive}"
+download_artifact "${download_url}" \
+  "artifacts/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz" "${archive}" "${helm_checksum}"
 printf '%s  %s\n' "${helm_checksum}" "${archive}" | sha256sum --check --status \
   || die "checksum do pacote Helm ${HELM_VERSION} não confere."
 

@@ -217,10 +217,30 @@ helm_oci() {
 }
 
 log "Baixando charts oficiais do Envoy Gateway ${ENVOY_GATEWAY_VERSION}."
-retry 3 3 helm_oci pull oci://docker.io/envoyproxy/gateway-crds-helm \
-  --version "${ENVOY_GATEWAY_VERSION}" --destination "${temporary_dir}"
-retry 3 3 helm_oci pull oci://docker.io/envoyproxy/gateway-helm \
-  --version "${ENVOY_GATEWAY_VERSION}" --destination "${temporary_dir}"
+charts_downloaded=false
+if [[ "${ARTIFACT_MODE}" != "cache" ]]; then
+  if retry 3 3 helm_oci pull oci://docker.io/envoyproxy/gateway-crds-helm \
+      --version "${ENVOY_GATEWAY_VERSION}" --destination "${temporary_dir}" \
+    && retry 3 3 helm_oci pull oci://docker.io/envoyproxy/gateway-helm \
+      --version "${ENVOY_GATEWAY_VERSION}" --destination "${temporary_dir}" \
+    && printf '%s  %s\n' "${ENVOY_GATEWAY_CRDS_CHART_SHA256}" "${crds_chart}" \
+      | sha256sum --check --status \
+    && printf '%s  %s\n' "${ENVOY_GATEWAY_CHART_SHA256}" "${gateway_chart}" \
+      | sha256sum --check --status; then
+    charts_downloaded=true
+  else
+    warn "download OCI dos charts do Envoy Gateway falhou ou retornou checksum inesperado."
+  fi
+fi
+if ! is_true "${charts_downloaded}"; then
+  if [[ "${ARTIFACT_MODE}" == "online" ]]; then
+    die "não foi possível baixar os charts e ARTIFACT_MODE=online proíbe o cache local."
+  fi
+  copy_cached_artifact "charts/gateway-crds-helm-${ENVOY_GATEWAY_VERSION}.tgz" \
+    "${crds_chart}" "${ENVOY_GATEWAY_CRDS_CHART_SHA256}"
+  copy_cached_artifact "charts/gateway-helm-${ENVOY_GATEWAY_VERSION}.tgz" \
+    "${gateway_chart}" "${ENVOY_GATEWAY_CHART_SHA256}"
+fi
 printf '%s  %s\n' "${ENVOY_GATEWAY_CRDS_CHART_SHA256}" "${crds_chart}" \
   | sha256sum --check --status || die "checksum do chart de CRDs do Envoy Gateway não confere."
 printf '%s  %s\n' "${ENVOY_GATEWAY_CHART_SHA256}" "${gateway_chart}" \

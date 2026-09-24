@@ -1,3 +1,5 @@
 cluster.env
 *.token
 *.log
+offline-cache/*/
+dist/

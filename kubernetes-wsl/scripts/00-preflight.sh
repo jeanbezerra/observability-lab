@@ -115,6 +115,18 @@ case "${DASHBOARD_DEFAULT_LANGUAGE}" in
 esac
 [[ "${DASHBOARD_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)$ ]] \
   || die "DASHBOARD_ROLLOUT_TIMEOUT deve usar s, m ou h (ex.: 10m)."
+case "${ARTIFACT_MODE}" in
+  auto|online|cache) ;;
+  *) die "ARTIFACT_MODE deve ser auto, online ou cache; recebido: ${ARTIFACT_MODE}." ;;
+esac
+if [[ "${ARTIFACT_MODE}" == "cache" ]]; then
+  require_command sha256sum
+  artifact_cache_complete \
+    || die "ARTIFACT_MODE=cache exige um bundle completo e compatível em ${ARTIFACT_CACHE_DIR}."
+  log "Bundle local validado; pacotes e artefatos de instalação não usarão a Internet."
+elif artifact_cache_compatible; then
+  log "Cache de contingência compatível detectado em ${ARTIFACT_CACHE_DIR}."
+fi
 
 for boolean_name in SINGLE_NODE ALLOW_UNSUPPORTED_OS ALLOW_LOW_RESOURCES AUTO_REPAIR_PARTIAL_CLUSTER; do
   boolean_value="${!boolean_name}"

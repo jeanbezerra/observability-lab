@@ -19,6 +19,13 @@ Verifique tudo:
 00-check-environment.cmd Ubuntu-26.04 30443 30080
 ```
 
+Se a instalação depender do bundle de contingência, importe-o antes de
+executar `install-all.sh` no Ubuntu:
+
+```bat
+05-import-offline-bundle.cmd "C:\Temp\kubernetes-wsl-artifacts-ubuntu-26.04-v1.36-amd64.tar.gz"
+```
+
 Abra somente o que estiver usando:
 
 ```bat
@@ -53,6 +60,21 @@ Faz somente leitura. Confirma que a distribuição existe, usa WSL 2 e iniciou c
 ```
 
 Padrões: `Ubuntu-26.04`, `30443` e `30080`. Consultar uma distribuição parada pode iniciá-la, comportamento normal de `wsl.exe`, mas o script não inicia nem encerra os túneis.
+
+### `05-import-offline-bundle.cmd`
+
+Extrai com `tar.exe` um bundle criado por `prepare-offline-bundle.sh` dentro de
+`offline-cache` no projeto. Não usa PowerShell, não altera firewall, não exige
+administrador do Windows e não inicia o cluster.
+
+```bat
+05-import-offline-bundle.cmd ARQUIVO_TAR_GZ
+```
+
+O arquivo inclui `.deb`, Helm, Flannel e charts do Envoy, mas não inclui
+imagens de contêiner. A integridade interna e a compatibilidade são verificadas
+pelo preflight Linux. Com `ARTIFACT_MODE=auto`, o cache é contingência; com
+`ARTIFACT_MODE=cache`, ele é obrigatório para esses artefatos.
 
 ### `10-restart-wsl.cmd`
 

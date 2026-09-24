@@ -66,7 +66,8 @@ restart_flannel=false
 flannel_subnet_file_ok || restart_flannel=true
 
 log "Baixando Flannel ${FLANNEL_VERSION} com verificação SHA-256."
-retry 3 3 curl -fL --retry 2 --connect-timeout 15 "${manifest_url}" -o "${manifest}"
+download_artifact "${manifest_url}" \
+  "artifacts/kube-flannel-${FLANNEL_VERSION}.yml" "${manifest}" "${FLANNEL_SHA256}"
 printf '%s  %s\n' "${FLANNEL_SHA256}" "${manifest}" | sha256sum --check --status \
   || die "checksum do manifesto Flannel não confere."
 

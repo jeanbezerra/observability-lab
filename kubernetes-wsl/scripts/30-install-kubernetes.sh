@@ -95,7 +95,9 @@ install -d -o root -g root -m 0755 /etc/apt/keyrings
 key_file="$(mktemp)"
 trap 'rm -f -- "${key_file}"' EXIT
 
-retry 3 3 curl -fsSL "https://pkgs.k8s.io/core:/stable:/${KUBERNETES_MINOR}/deb/Release.key" -o "${key_file}"
+download_artifact \
+  "https://pkgs.k8s.io/core:/stable:/${KUBERNETES_MINOR}/deb/Release.key" \
+  "artifacts/kubernetes-${KUBERNETES_MINOR}-Release.key" "${key_file}"
 gpg --dearmor --yes --output /etc/apt/keyrings/kubernetes-apt-keyring.gpg "${key_file}"
 chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
@@ -104,20 +106,9 @@ deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io
 EOF
 chmod 0644 /etc/apt/sources.list.d/kubernetes.list
 
-apt-get update
-reinstall_packages=()
-for command_package in kubelet:kubelet kubeadm:kubeadm kubectl:kubectl crictl:cri-tools; do
-  command_name="${command_package%%:*}"
-  package_name="${command_package##*:}"
-  if ! command -v "${command_name}" >/dev/null 2>&1 && package_is_installed "${package_name}"; then
-    reinstall_packages+=("${package_name}")
-  fi
-done
 apt-mark unhold "${kubernetes_packages[@]}" >/dev/null 2>&1 || true
-apt-get install -y --allow-change-held-packages "${kubernetes_packages[@]}"
-if (( ${#reinstall_packages[@]} > 0 )); then
-  apt-get install -y --reinstall --allow-change-held-packages "${reinstall_packages[@]}"
-fi
+apt_install_with_cache kubernetes -y --reinstall --allow-change-held-packages \
+  "${kubernetes_packages[@]}"
 apt-mark hold "${kubernetes_packages[@]}" >/dev/null
 systemctl enable kubelet
 

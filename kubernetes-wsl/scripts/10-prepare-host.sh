@@ -137,15 +137,8 @@ for command_package in "${required_command_packages[@]}"; do
   fi
 done
 if (( ${#missing_packages[@]} > 0 || ${#reinstall_packages[@]} > 0 )); then
-  apt-get update
-  if (( ${#missing_packages[@]} > 0 )); then
-    log "Instalando pacotes ausentes: ${missing_packages[*]}."
-    apt-get install -y --no-install-recommends "${missing_packages[@]}"
-  fi
-  if (( ${#reinstall_packages[@]} > 0 )); then
-    log "Reinstalando pacotes com comandos ausentes: ${reinstall_packages[*]}."
-    apt-get install -y --reinstall --no-install-recommends "${reinstall_packages[@]}"
-  fi
+  log "Instalando ou reparando os pacotes básicos do host."
+  apt_install_with_cache host -y --reinstall --no-install-recommends "${required_packages[@]}"
 fi
 
 log "Preparando recursos de kernel e um endereço de nó estável para reinícios do WSL."

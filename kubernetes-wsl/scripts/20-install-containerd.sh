@@ -76,15 +76,8 @@ if ! command -v runc >/dev/null 2>&1; then
   fi
 fi
 if (( ${#missing_packages[@]} > 0 || ${#reinstall_packages[@]} > 0 )); then
-  apt-get update
-  if (( ${#missing_packages[@]} > 0 )); then
-    log "Instalando componentes ausentes: ${missing_packages[*]}."
-    apt-get install -y --no-install-recommends "${missing_packages[@]}"
-  fi
-  if (( ${#reinstall_packages[@]} > 0 )); then
-    log "Reinstalando componentes com binários ausentes: ${reinstall_packages[*]}."
-    apt-get install -y --reinstall --no-install-recommends "${reinstall_packages[@]}"
-  fi
+  log "Instalando ou reparando containerd e runc."
+  apt_install_with_cache containerd -y --reinstall --no-install-recommends containerd runc
 fi
 
 install -d -o root -g root -m 0755 /etc/containerd
