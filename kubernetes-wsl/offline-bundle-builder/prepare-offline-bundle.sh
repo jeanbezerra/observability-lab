@@ -76,6 +76,12 @@ install -d -m 0755 "${artifact_dir}" "${chart_dir}" \
   "${staging_root}/apt/host" "${staging_root}/apt/containerd" \
   "${staging_root}/apt/kubernetes" "${apt_root}/sources.list.d" \
   "${apt_root}/lists/partial"
+# `common.sh` usa umask 027. Os diretórios intermediários criados por `install -d`
+# precisam continuar atravessáveis pelo sandbox `_apt`, não apenas os destinos.
+chmod 0755 "${staging_root}" "${staging_root}/apt" \
+  "${apt_root}" "${apt_root}/lists"
+chown _apt:root "${apt_root}/lists/partial"
+chmod 0700 "${apt_root}/lists/partial"
 
 version_without_prefix="${HELM_VERSION#v}"
 helm_archive="${artifact_dir}/helm-${HELM_VERSION}-linux-${architecture}.tar.gz"
@@ -144,6 +150,7 @@ for source_file in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sour
   cp -- "${source_file}" "${apt_root}/sources.list.d/$(basename -- "${source_file}")"
 done
 cp -- "${kubernetes_key}" "${apt_root}/kubernetes.asc"
+chmod 0644 "${apt_root}/kubernetes.asc"
 cat >"${apt_root}/sources.list.d/kubernetes.list" <<EOF
 deb [signed-by=${apt_root}/kubernetes.asc] https://pkgs.k8s.io/core:/stable:/${KUBERNETES_MINOR}/deb/ /
 EOF
@@ -163,7 +170,7 @@ download_deb_group() {
   local group="$1"
   shift
   local destination="${staging_root}/apt/${group}"
-  install -d -m 0755 "${destination}/partial"
+  install -d -o _apt -g root -m 0700 "${destination}/partial"
   log "Baixando grupo .deb ${group}."
   apt-get "${apt_options[@]}" \
     -o "Dir::Cache::archives=${destination}" \

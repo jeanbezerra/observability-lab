@@ -94,6 +94,7 @@ on_uninstall_exit() {
     log_event ERROR uninstaller failed \
       "mode=${UNINSTALL_MODE} phase=${CURRENT_PHASE} codigo=${exit_code} log=${BOOTSTRAP_LOG_FILE}"
   fi
+  finish_persistent_log
   exit "${exit_code}"
 }
 

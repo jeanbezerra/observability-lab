@@ -159,6 +159,11 @@ estiverem corretamente instalados por `dpkg`, a etapa Kubernetes também não ch
 o APT. Um repositório Kubernetes anteriormente habilitado é renomeado para
 `kubernetes.list.disabled`.
 
+Ao instalar os grupos `.deb` do bundle, versões já instaladas que sejam iguais ou
+mais novas são preservadas. O APT recebe temporariamente uma lista de fontes vazia,
+portanto não consulta a rede, não rebaixa correções mais recentes do Ubuntu e falha
+de forma explícita se o cache não contiver uma dependência necessária.
+
 O bundle contém pacotes `.deb` e suas dependências, chave do repositório
 Kubernetes, Helm, manifesto do Flannel e charts do Envoy Gateway. Ele não
 contém imagens de contêiner. Portanto, o notebook ainda precisa alcançar os
@@ -315,6 +320,7 @@ Não são instalados ou configurados: UFW, OIDC, Keycloak, Ingress NGINX, MetalL
 | `ALLOW_LOW_RESOURCES` | `false` | permite prosseguir abaixo dos mínimos |
 | `AUTO_REPAIR_PARTIAL_CLUSTER` | `true` | repara somente bootstrap incompleto sem `admin.conf` |
 | `BOOTSTRAP_LOG_DIR` | `/var/log/k8s-wsl-bootstrap` | diretório Linux dos transcripts de deploy e diagnóstico |
+| `BOOTSTRAP_COLOR` | `auto` | cores no console: `auto`, `always` ou `never`; `NO_COLOR=1` também desativa |
 | `DIAGNOSTIC_ON_ERROR` | `true` | executa o diagnóstico somente leitura quando o deploy falha |
 | `DIAGNOSTIC_CHECK_TIMEOUT_SECONDS` | `45` | limite individual de cada check do diagnóstico |
 | `DIAGNOSTIC_TAIL_LINES` | `100` | máximo de linhas por journal, evento ou log de Pod coletado |
@@ -369,12 +375,23 @@ kubectl -n kubernetes-dashboard logs deployment/headlamp --tail=200
 kubectl -n envoy-gateway-system logs deployment/envoy-gateway --tail=200
 ```
 
-Cada execução de `install-all.sh` cria um arquivo `deploy-AAAAMMDD-HHMMSS-PID.log`
-com modo `0600`. O formato registra data/hora, nível, componente, estado e mensagem,
-além de preservar toda a saída dos comandos filhos. O link `latest-deploy.log`
-aponta para a execução mais recente. Em caso de falha, o instalador acrescenta ao
-mesmo transcript os checks de todas as etapas, estados e journals de serviços,
-Pods não saudáveis, logs desses Pods e eventos Kubernetes do tipo `Warning`.
+Cada execução de `install-all.sh` mostra um cabeçalho com o contexto operacional,
+separa visualmente as 12 etapas e termina com um resumo do resultado e da duração
+de cada etapa. Em terminal interativo, sucesso, andamento, avisos e falhas recebem
+cores e símbolos distintos. Para desativar as cores, use `NO_COLOR=1` ou configure
+`BOOTSTRAP_COLOR=never`.
+
+O arquivo `deploy-AAAAMMDD-HHMMSS-PID.log`, criado com modo `0600`, permanece em
+texto puro, sem códigos ANSI. Cada registro contém data/hora, nível, componente,
+estado e mensagem; cada linha de saída bruta de `apt`, `kubeadm`, Helm e `kubectl`
+também recebe timestamp e o nível `OUTPUT`. O link `latest-deploy.log` aponta para
+a execução mais recente.
+
+Em caso de falha, o resumo destaca a etapa interrompida e o instalador executa uma
+coleta somente leitura separada. O deploy referencia o caminho do relatório, e o
+link `latest-diagnostic.log` oferece os checks, journals, Pods não saudáveis, logs
+desses Pods e eventos Kubernetes do tipo `Warning`, sem misturar essas evidências
+com a sequência principal do deploy.
 
 `diagnose.sh` pode ser executado a qualquer momento. Ele carrega o mesmo
 `cluster.env`, compara a configuração desejada com o estado real e retorna `0`

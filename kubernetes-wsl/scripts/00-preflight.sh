@@ -156,6 +156,10 @@ done
 
 [[ "${BOOTSTRAP_LOG_DIR}" == /* ]] \
   || die "BOOTSTRAP_LOG_DIR precisa ser um caminho Linux absoluto."
+case "${BOOTSTRAP_COLOR,,}" in
+  auto|always|never) ;;
+  *) die "BOOTSTRAP_COLOR precisa ser auto, always ou never; recebido: ${BOOTSTRAP_COLOR}." ;;
+esac
 
 project_fs="$(findmnt -T "${PROJECT_DIR}" -n -o FSTYPE 2>/dev/null || true)"
 case "${project_fs}" in

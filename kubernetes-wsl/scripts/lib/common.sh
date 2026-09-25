@@ -70,6 +70,7 @@ AUTO_REPAIR_PARTIAL_CLUSTER="${AUTO_REPAIR_PARTIAL_CLUSTER:-true}"
 KUBECONFIG_ADMIN="${KUBECONFIG_ADMIN:-/etc/kubernetes/admin.conf}"
 BOOTSTRAP_STATE_DIR="${BOOTSTRAP_STATE_DIR:-/var/lib/k8s-wsl-bootstrap}"
 BOOTSTRAP_LOG_DIR="${BOOTSTRAP_LOG_DIR:-/var/log/k8s-wsl-bootstrap}"
+BOOTSTRAP_COLOR="${BOOTSTRAP_COLOR:-auto}"
 DIAGNOSTIC_ON_ERROR="${DIAGNOSTIC_ON_ERROR:-true}"
 DIAGNOSTIC_CHECK_TIMEOUT_SECONDS="${DIAGNOSTIC_CHECK_TIMEOUT_SECONDS:-45}"
 DIAGNOSTIC_TAIL_LINES="${DIAGNOSTIC_TAIL_LINES:-100}"
@@ -85,6 +86,149 @@ log_event() {
   shift 3
   printf '%s | %-7s | %-28s | %-12s | %s\n' \
     "$(date --iso-8601=seconds)" "${level}" "${component}" "${status}" "$*"
+}
+
+trim_log_field() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "${value}"
+}
+
+console_color_enabled() {
+  [[ -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]] || return 1
+  case "${BOOTSTRAP_COLOR,,}" in
+    always) return 0 ;;
+    auto) [[ -t 3 ]] ;;
+    never) return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+display_log_status() {
+  case "$1" in
+    started) printf 'INICIADO' ;;
+    context) printf 'CONTEXTO' ;;
+    desired) printf 'DESEJADO' ;;
+    checking) printf 'VALIDANDO' ;;
+    running) printf 'EXECUTANDO' ;;
+    reconciling) printf 'CORRIGINDO' ;;
+    reconciled) printf 'CORRIGIDO' ;;
+    compliant) printf 'CONFORME' ;;
+    completed) printf 'CONCLUÍDO' ;;
+    validated) printf 'VALIDADO' ;;
+    success) printf 'SUCESSO' ;;
+    healthy) printf 'SAUDÁVEL' ;;
+    failed) printf 'FALHA' ;;
+    unhealthy) printf 'COM FALHAS' ;;
+    divergent) printf 'DIVERGENTE' ;;
+    timeout) printf 'TIMEOUT' ;;
+    api-unavailable) printf 'API INDISP.' ;;
+    warning) printf 'AVISO' ;;
+    warning-events) printf 'EVENTOS' ;;
+    failed-units) printf 'UNIDADES' ;;
+    pending) printf 'PENDENTE' ;;
+    skipped) printf 'IGNORADO' ;;
+    closed) printf 'FECHADO' ;;
+    collected) printf 'COLETADO' ;;
+    effective) printf 'EFETIVO' ;;
+    plan) printf 'PLANO' ;;
+    target-validated) printf 'ALVO VALIDADO' ;;
+    stopping) printf 'PARANDO' ;;
+    starting) printf 'INICIANDO' ;;
+    removing) printf 'REMOVENDO' ;;
+    cleanup) printf 'LIMPANDO' ;;
+    retry) printf 'REPETINDO' ;;
+    cleaned) printf 'LIMPO' ;;
+    dry-run) printf 'SIMULAÇÃO' ;;
+    resetting) printf 'RESETANDO' ;;
+    unavailable) printf 'INDISPONÍVEL' ;;
+    next-action) printf 'PRÓXIMA AÇÃO' ;;
+    output) printf 'SAÍDA' ;;
+    *) printf '%s' "${1^^}" ;;
+  esac
+}
+
+render_console_event() {
+  local event_line="$1" timestamp level component status message clock display_status
+  local color="" reset="" icon="•"
+  IFS='|' read -r timestamp level component status message <<<"${event_line}"
+  timestamp="$(trim_log_field "${timestamp}")"
+  level="$(trim_log_field "${level}")"
+  component="$(trim_log_field "${component}")"
+  status="$(trim_log_field "${status}")"
+  message="$(trim_log_field "${message}")"
+  display_status="$(display_log_status "${status}")"
+  clock="${timestamp#*T}"
+  clock="${clock:0:8}"
+
+  if console_color_enabled; then
+    reset='\033[0m'
+    case "${level}" in
+      HEADER) color='\033[1;34m' ;;
+      STAGE) color='\033[1;36m' ;;
+      SUMMARY) color='\033[1;35m' ;;
+      RESULT) color='\033[0;37m' ;;
+      WARNING) color='\033[1;33m' ;;
+      ERROR) color='\033[1;31m' ;;
+      *)
+        case "${status}" in
+          success|healthy|compliant|reconciled|completed|validated|target-validated|cleaned) color='\033[1;32m' ;;
+          checking|running|started|starting|stopping|removing|cleanup|resetting|dry-run) color='\033[0;36m' ;;
+          skipped|closed|observed) color='\033[0;90m' ;;
+          *) color='\033[0;34m' ;;
+        esac
+        ;;
+    esac
+  fi
+
+  case "${level}" in
+    HEADER)
+      printf '\n%b╔══════════════════════════════════════════════════════════════════════╗%b\n' "${color}" "${reset}" >&3
+      printf '%b║  %-68s║%b\n' "${color}" "${message:0:68}" "${reset}" >&3
+      printf '%b║  Execução: %-58s║%b\n' "${color}" "${status:0:58}" "${reset}" >&3
+      printf '%b╚══════════════════════════════════════════════════════════════════════╝%b\n' "${color}" "${reset}" >&3
+      ;;
+    STAGE)
+      printf '\n%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' "${color}" "${reset}" >&3
+      printf '%b  ETAPA %-7s  %s%b\n' "${color}" "${status}" "${message}" "${reset}" >&3
+      printf '%b  Componente: %s%b\n' "${color}" "${component}" "${reset}" >&3
+      printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' "${color}" "${reset}" >&3
+      ;;
+    SUMMARY)
+      printf '\n%b════════════════════ RESUMO DA EXECUÇÃO · %-10s ════════════════════%b\n' \
+        "${color}" "${display_status}" "${reset}" >&3
+      printf '%b%s%b\n' "${color}" "${message}" "${reset}" >&3
+      ;;
+    RESULT)
+      case "${status}" in
+        failed) icon='✖'; color="$(console_color_enabled && printf '\033[1;31m' || true)" ;;
+        reconciled) icon='↻'; color="$(console_color_enabled && printf '\033[1;32m' || true)" ;;
+        compliant|validated|success) icon='✔'; color="$(console_color_enabled && printf '\033[1;32m' || true)" ;;
+        *) icon='•' ;;
+      esac
+      printf '%b  %s  %-28s %-12s %s%b\n' \
+        "${color}" "${icon}" "${component}" "${display_status}" "${message}" "${reset}" >&3
+      ;;
+    *)
+      case "${level}" in
+        ERROR) icon='✖' ;;
+        WARNING) icon='!' ;;
+        *)
+          case "${status}" in
+            success|healthy|compliant|reconciled|completed|validated|target-validated|cleaned) icon='✔' ;;
+            checking) icon='→' ;;
+            running|started|starting|stopping|removing|cleanup|resetting) icon='▶' ;;
+            dry-run) icon='◇' ;;
+            skipped|closed) icon='○' ;;
+            *) icon='•' ;;
+          esac
+          ;;
+      esac
+      printf '%b%s  %-2s %-30s %-12s %s%b\n' \
+        "${color}" "${clock}" "${icon}" "${component}" "${display_status}" "${message}" "${reset}" >&3
+      ;;
+  esac
 }
 
 caller_component() {
@@ -136,12 +280,48 @@ start_persistent_log() {
   ln -sfn -- "$(basename -- "${BOOTSTRAP_LOG_FILE}")" "${latest_link}"
   export BOOTSTRAP_RUN_ID BOOTSTRAP_LOG_FILE
 
-  # Tudo que os scripts filhos escreverem em stdout/stderr também fica no Linux.
-  # O formato estruturado de log_event marca fases e resultados; a saída bruta
-  # entre esses eventos preserva integralmente a evidência dos comandos.
-  exec > >(tee -a "${BOOTSTRAP_LOG_FILE}") 2>&1
+  # Preserva o console original e normaliza cada linha não estruturada no arquivo.
+  # Assim, saídas de apt/kubeadm/Helm/kubectl ganham timestamp sem deixar o
+  # terminal artificialmente ruidoso. stdout e stderr são reunidos na ordem em
+  # que chegam, como já ocorria com tee.
+  exec 3>&1
+  exec > >(write_transcript "${BOOTSTRAP_LOG_FILE}") 2>&1
+  BOOTSTRAP_LOG_WRITER_PID="$!"
   log_event INFO logger started \
     "run_id=${BOOTSTRAP_RUN_ID} kind=${log_kind} file=${BOOTSTRAP_LOG_FILE}"
+}
+
+finish_persistent_log() {
+  local writer_pid="${BOOTSTRAP_LOG_WRITER_PID:-}"
+  [[ -n "${writer_pid}" ]] || return 0
+  # Restaurar stdout/stderr fecha a entrada do writer; wait garante que a última
+  # linha já esteja persistida quando o comando devolve o controle ao usuário.
+  exec 1>&3 2>&3
+  wait "${writer_pid}" 2>/dev/null || true
+  BOOTSTRAP_LOG_WRITER_PID=""
+  exec 3>&-
+}
+
+write_transcript() {
+  local log_file="$1" line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[^[:space:]]+[[:space:]]\| ]]; then
+      printf '%s\n' "${line}" >>"${log_file}"
+      render_console_event "${line}"
+    elif [[ -z "${line}" ]]; then
+      printf '\n' >&3
+      printf '\n' >>"${log_file}"
+    else
+      if console_color_enabled; then
+        printf '\033[0;90m  │ %s\033[0m\n' "${line}" >&3
+      else
+        printf '  | %s\n' "${line}" >&3
+      fi
+      printf '%s | %-7s | %-28s | %-12s | %s\n' \
+        "$(date --iso-8601=seconds)" OUTPUT command-output output "${line}" \
+        >>"${log_file}"
+    fi
+  done
 }
 
 package_is_installed() {
@@ -338,8 +518,10 @@ download_artifact() {
 }
 
 install_cached_deb_group() {
-  local group="$1" cache_root directory
+  local group="$1" cache_root directory deb_file package_name cached_version installed_version
+  local apt_sources_dir resolved_sources_dir apt_exit preserved_count=0
   local deb_files=()
+  local install_files=()
   artifact_cache_compatible \
     || die "cache local ausente ou incompatível em ${ARTIFACT_CACHE_DIR}; gere novamente o bundle."
   cache_root="$(artifact_cache_root)"
@@ -348,9 +530,46 @@ install_cached_deb_group() {
     || die "pacotes .deb do grupo ${group} estão ausentes ou corrompidos."
   mapfile -t deb_files < <(find "${directory}" -maxdepth 1 -type f -name '*.deb' -print | sort)
   (( ${#deb_files[@]} > 0 )) || die "nenhum pacote .deb encontrado no grupo ${group}."
+  for deb_file in "${deb_files[@]}"; do
+    package_name="$(dpkg-deb -f "${deb_file}" Package)"
+    cached_version="$(dpkg-deb -f "${deb_file}" Version)"
+    installed_version="$(dpkg-query -W -f='${Version}' "${package_name}" 2>/dev/null || true)"
+    if [[ -n "${installed_version}" ]] \
+      && dpkg --compare-versions "${installed_version}" ge "${cached_version}"; then
+      preserved_count=$((preserved_count + 1))
+      continue
+    fi
+    install_files+=("${deb_file}")
+  done
+  log_event INFO "offline-packages/${group}" checking \
+    "preservados=${preserved_count} instalar=${#install_files[@]} total=${#deb_files[@]}"
+  if (( ${#install_files[@]} == 0 )); then
+    log "Todos os pacotes do grupo ${group} já atendem às versões do cache."
+    return 0
+  fi
   log "Instalando o grupo ${group} pelo cache local verificado."
-  apt-get install -y --no-download --no-install-recommends \
-    --allow-change-held-packages --reinstall "${deb_files[@]}"
+  # APT 3.2 rejeita --no-download quando recebe arquivos .deb locais. Um conjunto
+  # temporário e vazio de sources mantém a operação estritamente offline sem
+  # impedir o processamento dos arquivos verificados do bundle.
+  apt_sources_dir="$(mktemp -d /tmp/k8s-wsl-apt-sources.XXXXXX)"
+  install -m 0600 /dev/null "${apt_sources_dir}/sources.list"
+  install -d -m 0700 "${apt_sources_dir}/sources.list.d"
+  if apt-get \
+    -o "Dir::Etc::sourcelist=${apt_sources_dir}/sources.list" \
+    -o "Dir::Etc::sourceparts=${apt_sources_dir}/sources.list.d" \
+    -o APT::Get::List-Cleanup=0 \
+    install -y --no-install-recommends --allow-change-held-packages \
+    "${install_files[@]}"; then
+    apt_exit=0
+  else
+    apt_exit=$?
+  fi
+  resolved_sources_dir="$(realpath -m -- "${apt_sources_dir}")"
+  case "${resolved_sources_dir}" in
+    /tmp/k8s-wsl-apt-sources.*) rm -rf -- "${resolved_sources_dir}" ;;
+    *) die "diretório APT temporário inesperado; limpeza recusada: ${resolved_sources_dir}." ;;
+  esac
+  return "${apt_exit}"
 }
 
 apt_install_with_cache() {

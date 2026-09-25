@@ -208,9 +208,11 @@ fi
 if (( diagnostic_failures == 0 )); then
   log_event INFO diagnostic healthy \
     "failures=0 warnings=${diagnostic_warnings} log=${BOOTSTRAP_LOG_FILE:-${K8S_DIAGNOSTIC_PARENT_LOG:-stdout}}"
+  finish_persistent_log
   exit 0
 fi
 
 log_event ERROR diagnostic unhealthy \
   "failures=${diagnostic_failures} warnings=${diagnostic_warnings} log=${BOOTSTRAP_LOG_FILE:-${K8S_DIAGNOSTIC_PARENT_LOG:-stdout}}"
+finish_persistent_log
 exit 1
