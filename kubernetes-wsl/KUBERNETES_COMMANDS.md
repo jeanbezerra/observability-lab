@@ -771,6 +771,14 @@ Prefira executar os scripts: eles validam que o recurso pertence ao instalador, 
 sudo bash diagnose.sh cluster.env
 sudo less /var/log/k8s-wsl-bootstrap/latest-diagnostic.log
 
+# Plano de recuperação: no máximo três estratégias, sem alterar a configuração
+sudo bash diagnose.sh --repair-dry-run cluster.env
+sudo less /var/log/k8s-wsl-bootstrap/latest-repair-dry-run.log
+
+# Recuperação controlada: no máximo três ações e cinco minutos no total
+sudo bash diagnose.sh --repair cluster.env
+sudo less /var/log/k8s-wsl-bootstrap/latest-repair.log
+
 # Visão ampla sem alterar o cluster
 kubectl cluster-info dump --output-directory=./cluster-dump
 

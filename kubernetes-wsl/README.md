@@ -372,6 +372,11 @@ sudo less /var/log/k8s-wsl-bootstrap/latest-deploy.log
 sudo bash diagnose.sh cluster.env
 sudo less /var/log/k8s-wsl-bootstrap/latest-diagnostic.log
 
+# Planejar ou executar a recuperação controlada
+sudo bash diagnose.sh --repair-dry-run cluster.env
+sudo bash diagnose.sh --repair cluster.env
+sudo less /var/log/k8s-wsl-bootstrap/latest-repair.log
+
 sudo journalctl -u containerd -u kubelet -u k8s-headlamp-local -u k8s-gateway-local -n 200 --no-pager
 kubectl -n kubernetes-dashboard logs deployment/headlamp --tail=200
 kubectl -n envoy-gateway-system logs deployment/envoy-gateway --tail=200
@@ -397,9 +402,23 @@ com a sequência principal do deploy.
 
 `diagnose.sh` pode ser executado a qualquer momento. Ele carrega o mesmo
 `cluster.env`, compara a configuração desejada com o estado real e retorna `0`
-quando não encontra divergências ou `1` quando há algo pendente. O relatório
-mostra somente campos operacionais selecionados e o fingerprint da configuração;
-o conteúdo bruto do `cluster.env` não é copiado para o log.
+quando não encontra divergências ou `1` quando há algo pendente. Antes dos checks
+gerais, ele mostra uma seção de saúde por prioridade: host e IP estável (`P0`),
+containerd/kubelet (`P1`), etcd e API Server (`P2`), controladores (`P3`), rede,
+Node Ready e DNS (`P4`) e aplicações (`P5`). Componentes dependentes aparecem como
+`BLOQUEADO`, evitando que um efeito secundário pareça ser a causa raiz. O
+relatório mostra somente campos operacionais selecionados e o fingerprint da
+configuração; o conteúdo bruto do `cluster.env` não é copiado para o log.
+
+O modo `--repair-dry-run` registra o plano sem modificar o host. O modo
+`--repair` permite no máximo três ações diferentes, respeita o menor valor entre
+`CLUSTER_OPERATION_TIMEOUT` e cinco minutos e reavalia toda a cadeia após cada
+ação. A recuperação automática pode padronizar hostname/timezone/`NO_PROXY`,
+reiniciar serviços, reconciliar containerd ou rede e recriar somente containers
+estáticos já encerrados. Ela nunca executa `kubeadm reset`, renova certificados,
+regenera manifests/kubeconfig, apaga dados do etcd ou remove pacotes Linux.
+Inconsistência de identidade, certificado, manifest ou indício de corrupção do
+etcd encerra a recuperação como `BLOQUEADO` e preserva as evidências no log.
 
 Consulte também [KUBERNETES_COMMANDS.md](KUBERNETES_COMMANDS.md).
 
@@ -484,6 +503,23 @@ sudo less /var/log/k8s-wsl-bootstrap/latest-diagnostic.log
 O relatório continua após uma falha para mostrar também erros dependentes nas
 etapas seguintes. Isso ajuda a separar a causa inicial dos efeitos em Flannel,
 DNS, Envoy e Headlamp.
+
+### Simular ou tentar uma recuperação segura
+
+```bash
+# Não altera a configuração nem o cluster; mostra as estratégias consideradas
+sudo bash diagnose.sh --repair-dry-run cluster.env
+sudo less /var/log/k8s-wsl-bootstrap/latest-repair-dry-run.log
+
+# Executa somente ações permitidas e mantém auditoria completa
+sudo bash diagnose.sh --repair cluster.env
+sudo less /var/log/k8s-wsl-bootstrap/latest-repair.log
+```
+
+Use primeiro a simulação em máquinas corporativas. Antes de agir, a coleta é
+direcionada à causa provável e pode incluir estado do systemd, journals, portas,
+containers estáticos, logs do control plane, expiração de certificados e
+`/readyz?verbose`.
 
 ### A etapa 40 demorou ou foi interrompida
 

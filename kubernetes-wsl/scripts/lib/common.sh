@@ -167,6 +167,9 @@ display_log_status() {
     validated) printf 'VALIDADO' ;;
     success) printf 'SUCESSO' ;;
     healthy) printf 'SAUDÁVEL' ;;
+    degraded) printf 'DEGRADADO' ;;
+    blocked) printf 'BLOQUEADO' ;;
+    unknown) printf 'DESCONHECIDO' ;;
     failed) printf 'FALHA' ;;
     unhealthy) printf 'COM FALHAS' ;;
     divergent) printf 'DIVERGENTE' ;;
@@ -189,6 +192,11 @@ display_log_status() {
     retry) printf 'REPETINDO' ;;
     cleaned) printf 'LIMPO' ;;
     dry-run) printf 'SIMULAÇÃO' ;;
+    executed) printf 'EXECUTADO' ;;
+    progressed) printf 'PROGRESSO' ;;
+    recovered) printf 'RECUPERADO' ;;
+    unresolved) printf 'NÃO RESOLVIDO' ;;
+    priority) printf 'PRIORIDADE' ;;
     resetting) printf 'RESETANDO' ;;
     unavailable) printf 'INDISPONÍVEL' ;;
     next-action) printf 'PRÓXIMA AÇÃO' ;;
@@ -221,7 +229,8 @@ render_console_event() {
       ERROR) color='\033[1;31m' ;;
       *)
         case "${status}" in
-          success|healthy|compliant|reconciled|completed|validated|target-validated|cleaned) color='\033[1;32m' ;;
+          success|healthy|compliant|reconciled|completed|validated|target-validated|cleaned|recovered) color='\033[1;32m' ;;
+          degraded|blocked|unknown|progressed) color='\033[1;33m' ;;
           checking|running|started|starting|stopping|removing|cleanup|resetting|dry-run) color='\033[0;36m' ;;
           skipped|closed|observed) color='\033[0;90m' ;;
           *) color='\033[0;34m' ;;
@@ -239,7 +248,7 @@ render_console_event() {
       ;;
     STAGE)
       printf '\n%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' "${color}" "${reset}" >&3
-      printf '%b  ETAPA %-7s  %s%b\n' "${color}" "${status}" "${message}" "${reset}" >&3
+      printf '%b  ETAPA %-12s %s%b\n' "${color}" "${display_status}" "${message}" "${reset}" >&3
       printf '%b  Componente: %s%b\n' "${color}" "${component}" "${reset}" >&3
       printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' "${color}" "${reset}" >&3
       ;;
@@ -250,9 +259,11 @@ render_console_event() {
       ;;
     RESULT)
       case "${status}" in
-        failed) icon='✖'; color="$(console_color_enabled && printf '\033[1;31m' || true)" ;;
-        reconciled) icon='↻'; color="$(console_color_enabled && printf '\033[1;32m' || true)" ;;
+        failed|unresolved) icon='✖'; color="$(console_color_enabled && printf '\033[1;31m' || true)" ;;
+        reconciled|recovered) icon='↻'; color="$(console_color_enabled && printf '\033[1;32m' || true)" ;;
         compliant|validated|success) icon='✔'; color="$(console_color_enabled && printf '\033[1;32m' || true)" ;;
+        blocked|degraded|progressed) icon='!'; color="$(console_color_enabled && printf '\033[1;33m' || true)" ;;
+        dry-run) icon='◇'; color="$(console_color_enabled && printf '\033[0;36m' || true)" ;;
         *) icon='•' ;;
       esac
       printf '%b  %s  %-28s %-12s %s%b\n' \
@@ -264,7 +275,7 @@ render_console_event() {
         WARNING) icon='!' ;;
         *)
           case "${status}" in
-            success|healthy|compliant|reconciled|completed|validated|target-validated|cleaned) icon='✔' ;;
+            success|healthy|compliant|reconciled|completed|validated|target-validated|cleaned|recovered) icon='✔' ;;
             checking) icon='→' ;;
             running|started|starting|stopping|removing|cleanup|resetting) icon='▶' ;;
             dry-run) icon='◇' ;;
