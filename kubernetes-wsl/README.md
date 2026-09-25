@@ -296,9 +296,11 @@ Não são instalados ou configurados: UFW, OIDC, Keycloak, Ingress NGINX, MetalL
 | `KUBERNETES_MINOR` | `v1.36` | canal minor do repositório Kubernetes |
 | `NODE_IP` | `10.254.254.1` | endereço estável interno criado em `lo` |
 | `NODE_NAME` | `kubernetes-wsl` | nome fixo do nó |
+| `SYSTEM_TIMEZONE` | `America/Sao_Paulo` | timezone aplicado ao Linux com `timedatectl` |
+| `NO_PROXY_EXTRA` | vazio | destinos corporativos adicionais que também devem ignorar o proxy |
 | `ADMIN_USER` | usuário que chamou `sudo` | recebe `~/.kube/config` e a CA pública |
-| `CLUSTER_OPERATION_TIMEOUT` | `20m` | espera de rollouts, CRDs, rede, Gateway e acessos locais |
-| `KUBEADM_INIT_TIMEOUT` | `20m` | espera interna e externa da etapa 40/control plane |
+| `CLUSTER_OPERATION_TIMEOUT` | `5m` | espera de rollouts, CRDs, rede, Gateway e acessos locais |
+| `KUBEADM_INIT_TIMEOUT` | `5m` | espera interna e externa da etapa 40/control plane |
 | `KUBERNETES_REQUEST_TIMEOUT_SECONDS` | `30` | limite de cada consulta curta à API/CRI |
 | `ARTIFACT_CONNECT_TIMEOUT_SECONDS` | `60` | limite para estabelecer conexões de download |
 | `ARTIFACT_RETRY_ATTEMPTS` | `6` | tentativas de download e pull de imagem |
@@ -307,7 +309,7 @@ Não são instalados ou configurados: UFW, OIDC, Keycloak, Ingress NGINX, MetalL
 | `SERVICE_CIDR` | `10.96.0.0/12` | rede dos Services |
 | `DASHBOARD_LOCAL_PORT` | `30443` | porta local do Windows/WSL |
 | `DASHBOARD_DEFAULT_LANGUAGE` | `pt` | idioma do link do Headlamp |
-| `DASHBOARD_ROLLOUT_TIMEOUT` | `20m` | espera específica pelo Headlamp |
+| `DASHBOARD_ROLLOUT_TIMEOUT` | `5m` | espera específica pelo Headlamp |
 | `HELM_VERSION` | `v4.3.0` | versão reproduzível usada para os charts OCI |
 | `GATEWAY_API_VERSION` | `v1.6.1` | bundle Standard compatível com o Envoy Gateway fixado |
 | `ENVOY_GATEWAY_VERSION` | `v1.9.1` | release estável do controlador e dataplane |
@@ -376,7 +378,7 @@ kubectl -n envoy-gateway-system logs deployment/envoy-gateway --tail=200
 ```
 
 Cada execução de `install-all.sh` mostra um cabeçalho com o contexto operacional,
-separa visualmente as 12 etapas e termina com um resumo do resultado e da duração
+separa visualmente as 13 etapas e termina com um resumo do resultado e da duração
 de cada etapa. Em terminal interativo, sucesso, andamento, avisos e falhas recebem
 cores e símbolos distintos. Para desativar as cores, use `NO_COLOR=1` ou configure
 `BOOTSTRAP_COLOR=never`.
@@ -430,6 +432,9 @@ auditoria. Portanto, comandos como `kubeadm`, `kubectl` e `crictl` continuam
 instalados, embora não exista mais um cluster. Imagens de Docker/Rancher Desktop
 fora do namespace Kubernetes também não são tocadas.
 
+Os drop-ins `NO_PROXY` específicos do Kubernetes são removidos. O hostname e o
+timezone padronizados são configurações da máquina e permanecem aplicados.
+
 Cada execução gera um log `uninstall-AAAAMMDD-HHMMSS-PID.log` em
 `/var/log/k8s-wsl-bootstrap`; o mais recente fica disponível por:
 
@@ -451,11 +456,20 @@ sudo bash install-all.sh cluster.env
 
 - Rede mirrored: Windows e WSL usam `localhost` bidirecional, enquanto DNS tunneling, `autoProxy` e `bestEffortDnsParsing` melhoram a compatibilidade com VPN e resolução corporativa.
 - VPN e proxy: se downloads de pacotes falharem, o bundle local pode assumir automaticamente; imagens continuam exigindo os registries.
+- Bypass local: a etapa `05-standardize-system` combina o `NO_PROXY` existente com `127.0.0.1`, `localhost`, `NODE_IP`, `NODE_NAME`, os CIDRs de Pods/Services e os sufixos DNS do cluster. O resultado é aplicado em maiúsculas e minúsculas ao instalador, shells futuros, containerd, kubelet e túneis `kubectl`.
+- Identidade do WSL: a mesma etapa ajusta o hostname ativo e o hostname persistente de `/etc/wsl.conf` para `NODE_NAME`, além de configurar `SYSTEM_TIMEZONE` com `timedatectl`.
 - Cache local: gere-o em Ubuntu 26.04 da mesma arquitetura. Refaça o bundle ao mudar Kubernetes, Helm, Flannel ou Envoy Gateway; não versione os binários no Git.
 - Proxy autenticado: prefira configuração corporativa de APT e variáveis de ambiente fornecidas pela TI; não versione credenciais em `cluster.env`.
 - Política de execução: os scripts Windows são `.cmd`, não usam PowerShell e controlam o túnel por `wsl.exe`/systemd.
 - Firewall: esta pasta não chama `ufw`, `netsh advfirewall` ou APIs do Windows Firewall.
 - Exposição remota: deliberadamente não suportada. Headlamp e Gateway são alcançados do Windows apenas por túneis locais independentes.
+
+Para reconciliar apenas a padronização do Linux, sem executar as demais etapas:
+
+```bash
+sudo env K8S_CONFIG_FILE="$(realpath cluster.env)" \
+  bash scripts/05-standardize-system.sh
+```
 
 ## Diagnóstico
 

@@ -23,6 +23,8 @@ POD_NETWORK_CIDR="${POD_NETWORK_CIDR:-10.244.0.0/16}"
 SERVICE_CIDR="${SERVICE_CIDR:-10.96.0.0/12}"
 NODE_IP="${NODE_IP:-10.254.254.1}"
 NODE_NAME="${NODE_NAME:-kubernetes-wsl}"
+SYSTEM_TIMEZONE="${SYSTEM_TIMEZONE:-America/Sao_Paulo}"
+NO_PROXY_EXTRA="${NO_PROXY_EXTRA:-}"
 ADMIN_USER="${ADMIN_USER:-${SUDO_USER:-}}"
 if [[ -z "${ADMIN_USER}" ]]; then
   ADMIN_USER="$(getent passwd 2>/dev/null | awk -F: '$3 == 1000 {print $1; exit}')"
@@ -34,11 +36,11 @@ DASHBOARD_LOCAL_PORT="${DASHBOARD_LOCAL_PORT:-30443}"
 DASHBOARD_CERT_DAYS="${DASHBOARD_CERT_DAYS:-825}"
 DASHBOARD_DEFAULT_LANGUAGE="${DASHBOARD_DEFAULT_LANGUAGE:-pt}"
 HEADLAMP_IMAGE="${HEADLAMP_IMAGE:-ghcr.io/headlamp-k8s/headlamp:v0.45.0}"
-# Tempos conservadores para notebooks corporativos com CPU, disco e rede lentos.
-CLUSTER_OPERATION_TIMEOUT="${CLUSTER_OPERATION_TIMEOUT:-20m}"
-KUBEADM_INIT_TIMEOUT="${KUBEADM_INIT_TIMEOUT:-20m}"
+# Limites curtos para tornar falhas de reconciliação visíveis rapidamente.
+CLUSTER_OPERATION_TIMEOUT="${CLUSTER_OPERATION_TIMEOUT:-5m}"
+KUBEADM_INIT_TIMEOUT="${KUBEADM_INIT_TIMEOUT:-5m}"
 KUBERNETES_REQUEST_TIMEOUT_SECONDS="${KUBERNETES_REQUEST_TIMEOUT_SECONDS:-30}"
-DASHBOARD_ROLLOUT_TIMEOUT="${DASHBOARD_ROLLOUT_TIMEOUT:-20m}"
+DASHBOARD_ROLLOUT_TIMEOUT="${DASHBOARD_ROLLOUT_TIMEOUT:-5m}"
 ARTIFACT_CONNECT_TIMEOUT_SECONDS="${ARTIFACT_CONNECT_TIMEOUT_SECONDS:-60}"
 ARTIFACT_RETRY_ATTEMPTS="${ARTIFACT_RETRY_ATTEMPTS:-6}"
 ARTIFACT_RETRY_DELAY_SECONDS="${ARTIFACT_RETRY_DELAY_SECONDS:-10}"
@@ -79,7 +81,53 @@ HEADLAMP_FORWARD_SERVICE="${HEADLAMP_FORWARD_SERVICE:-k8s-headlamp-local.service
 GATEWAY_FORWARD_SERVICE="${GATEWAY_FORWARD_SERVICE:-k8s-gateway-local.service}"
 OFFLINE_CACHE_FORMAT_VERSION="1"
 
-readonly LIB_DIR SCRIPTS_DIR PROJECT_DIR OFFLINE_CACHE_FORMAT_VERSION
+merge_no_proxy_values() {
+  local raw entry key existing duplicate
+  local -a entries=() merged=()
+
+  for raw in "$@"; do
+    IFS=',' read -r -a entries <<<"${raw}"
+    for entry in "${entries[@]}"; do
+      entry="${entry#"${entry%%[![:space:]]*}"}"
+      entry="${entry%"${entry##*[![:space:]]}"}"
+      [[ -n "${entry}" ]] || continue
+      key="${entry,,}"
+      duplicate=false
+      for existing in "${merged[@]}"; do
+        if [[ "${existing,,}" == "${key}" ]]; then
+          duplicate=true
+          break
+        fi
+      done
+      if [[ "${duplicate}" == "false" ]]; then
+        merged+=("${entry}")
+      fi
+    done
+  done
+
+  local IFS=','
+  printf '%s\n' "${merged[*]}"
+}
+
+K8S_NO_PROXY="$(merge_no_proxy_values \
+  "${NO_PROXY:-}" \
+  "${no_proxy:-}" \
+  "${NO_PROXY_EXTRA}" \
+  "127.0.0.1" \
+  "localhost" \
+  "::1" \
+  "${NODE_IP}" \
+  "${NODE_NAME}" \
+  "${POD_NETWORK_CIDR}" \
+  "${SERVICE_CIDR}" \
+  ".svc" \
+  ".svc.cluster.local" \
+  ".cluster.local")"
+NO_PROXY="${K8S_NO_PROXY}"
+no_proxy="${K8S_NO_PROXY}"
+export NO_PROXY no_proxy
+
+readonly LIB_DIR SCRIPTS_DIR PROJECT_DIR OFFLINE_CACHE_FORMAT_VERSION K8S_NO_PROXY
 
 log_event() {
   local level="$1" component="$2" status="$3"
@@ -419,8 +467,16 @@ effective_node_name() {
   printf '%s\n' "${NODE_NAME}"
 }
 
+systemd_escape_environment_value() {
+  local value="${1//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '%s\n' "${value}"
+}
+
 kube() {
-  kubectl --kubeconfig "${KUBECONFIG_ADMIN}" "$@"
+  NO_PROXY="${K8S_NO_PROXY}" no_proxy="${K8S_NO_PROXY}" \
+    kubectl --kubeconfig "${KUBECONFIG_ADMIN}" "$@"
 }
 
 artifact_arch() {
@@ -598,6 +654,8 @@ desired_state_fingerprint() {
     "SERVICE_CIDR=${SERVICE_CIDR}" \
     "NODE_IP=${NODE_IP}" \
     "NODE_NAME=${NODE_NAME}" \
+    "SYSTEM_TIMEZONE=${SYSTEM_TIMEZONE}" \
+    "NO_PROXY=${K8S_NO_PROXY}" \
     "ADMIN_USER=${ADMIN_USER}" \
     "SINGLE_NODE=${SINGLE_NODE}" \
     "DASHBOARD_NAMESPACE=${DASHBOARD_NAMESPACE}" \

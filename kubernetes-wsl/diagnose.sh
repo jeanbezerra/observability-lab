@@ -99,11 +99,14 @@ log_event INFO diagnostic started \
 log_event INFO configuration effective \
   "node=${NODE_NAME}/${NODE_IP} kubernetes=${KUBERNETES_MINOR} pod_cidr=${POD_NETWORK_CIDR} service_cidr=${SERVICE_CIDR} artifact_mode=${ARTIFACT_MODE}"
 log_event INFO configuration effective \
+  "hostname=$(hostname 2>/dev/null || true)/${NODE_NAME} timezone=$(timedatectl show --property=Timezone --value 2>/dev/null || true)/${SYSTEM_TIMEZONE} no_proxy=${K8S_NO_PROXY}"
+log_event INFO configuration effective \
   "headlamp=${DASHBOARD_NAMESPACE}:${DASHBOARD_LOCAL_PORT} gateway=${GATEWAY_NAMESPACE}/${GATEWAY_NAME}:${GATEWAY_LOCAL_PORT}"
 
 run_state_check "00-preflight" "${ROOT_DIR}/scripts/00-preflight.sh" ""
 
 state_steps=(
+  05-standardize-system.sh
   10-prepare-host.sh
   20-install-containerd.sh
   30-install-kubernetes.sh

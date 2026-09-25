@@ -11,6 +11,8 @@ admin_group="$(id -gn "${ADMIN_USER}")"
 user_kubeconfig="${admin_home}/.kube/config"
 
 render_unit() {
+  local escaped_no_proxy
+  escaped_no_proxy="$(systemd_escape_environment_value "${K8S_NO_PROXY}")"
   cat <<EOF
 [Unit]
 Description=Headlamp HTTPS restricted to localhost for Windows/WSL
@@ -21,6 +23,8 @@ After=network-online.target kubelet.service ${WSL_NODE_IP_SERVICE}
 Type=simple
 User=${ADMIN_USER}
 Group=${admin_group}
+Environment="NO_PROXY=${escaped_no_proxy}"
+Environment="no_proxy=${escaped_no_proxy}"
 ExecStart=/usr/bin/kubectl --kubeconfig=${user_kubeconfig} --namespace=${DASHBOARD_NAMESPACE} port-forward --address=127.0.0.1 service/headlamp ${DASHBOARD_LOCAL_PORT}:443
 Restart=always
 RestartSec=5s

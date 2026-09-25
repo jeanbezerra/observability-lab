@@ -301,6 +301,9 @@ Alvos específicos de configuração/estado:
   /etc/systemd/system/${HEADLAMP_FORWARD_SERVICE}
   /etc/systemd/system/${GATEWAY_FORWARD_SERVICE}
   /etc/systemd/system/kubelet.service.d/05-k8s-wsl-node-ip.conf
+  /etc/systemd/system/kubelet.service.d/20-k8s-wsl-no-proxy.conf
+  /etc/systemd/system/containerd.service.d/20-k8s-wsl-no-proxy.conf
+  /etc/profile.d/k8s-wsl-no-proxy.sh
   /etc/sysctl.d/99-kubernetes-wsl.conf
   /usr/local/sbin/k8s-gateway-local-forward
   /etc/crictl.yaml
@@ -348,6 +351,9 @@ remove_file "/etc/systemd/system/${HEADLAMP_FORWARD_SERVICE}"
 remove_file "/etc/systemd/system/${GATEWAY_FORWARD_SERVICE}"
 remove_file "/etc/systemd/system/${WSL_NODE_IP_SERVICE}"
 remove_file "/etc/systemd/system/kubelet.service.d/05-k8s-wsl-node-ip.conf"
+remove_file "/etc/systemd/system/kubelet.service.d/20-k8s-wsl-no-proxy.conf"
+remove_file "/etc/systemd/system/containerd.service.d/20-k8s-wsl-no-proxy.conf"
+remove_file "/etc/profile.d/k8s-wsl-no-proxy.sh"
 remove_file "/etc/sysctl.d/99-kubernetes-wsl.conf"
 remove_file "/usr/local/sbin/k8s-gateway-local-forward"
 remove_file "/etc/crictl.yaml"
@@ -385,6 +391,7 @@ else
 fi
 
 systemctl daemon-reload
+systemctl try-restart containerd.service >/dev/null 2>&1 || true
 systemctl reset-failed kubelet.service "${HEADLAMP_FORWARD_SERVICE}" \
   "${GATEWAY_FORWARD_SERVICE}" "${WSL_NODE_IP_SERVICE}" >/dev/null 2>&1 || true
 

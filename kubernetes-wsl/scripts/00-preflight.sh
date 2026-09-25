@@ -58,6 +58,13 @@ fi
 valid_ipv4_cidr "${POD_NETWORK_CIDR}" || die "POD_NETWORK_CIDR inválido."
 valid_ipv4_cidr "${SERVICE_CIDR}" || die "SERVICE_CIDR inválido."
 valid_ipv4 "${NODE_IP}" || die "NODE_IP inválido."
+case "${SYSTEM_TIMEZONE}" in
+  ""|/*|*..*) die "SYSTEM_TIMEZONE contém um identificador inseguro: ${SYSTEM_TIMEZONE}." ;;
+esac
+[[ -e "/usr/share/zoneinfo/${SYSTEM_TIMEZONE}" ]] \
+  || die "SYSTEM_TIMEZONE não existe no banco de fusos horários: ${SYSTEM_TIMEZONE}."
+[[ "${K8S_NO_PROXY}" != *$'\n'* && "${K8S_NO_PROXY}" != *$'\r'* ]] \
+  || die "NO_PROXY contém quebra de linha e não pode ser aplicado com segurança."
 if cidr_contains_ipv4 "${POD_NETWORK_CIDR}" "${NODE_IP}"; then
   die "NODE_IP não pode pertencer a POD_NETWORK_CIDR."
 fi
@@ -123,7 +130,7 @@ esac
 for timeout_name in CLUSTER_OPERATION_TIMEOUT KUBEADM_INIT_TIMEOUT; do
   timeout_value="${!timeout_name}"
   [[ "${timeout_value}" =~ ^[0-9]+(s|m|h)$ ]] \
-    || die "${timeout_name} deve usar s, m ou h (ex.: 20m)."
+    || die "${timeout_name} deve usar s, m ou h (ex.: 5m)."
 done
 for seconds_name in KUBERNETES_REQUEST_TIMEOUT_SECONDS ARTIFACT_CONNECT_TIMEOUT_SECONDS \
   ARTIFACT_RETRY_ATTEMPTS ARTIFACT_RETRY_DELAY_SECONDS \

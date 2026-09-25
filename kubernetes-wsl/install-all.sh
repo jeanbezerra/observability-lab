@@ -32,7 +32,7 @@ CURRENT_PHASE_LABEL="Inicialização do instalador"
 CURRENT_PHASE_STARTED="${SECONDS}"
 INSTALL_STARTED_SECONDS="${SECONDS}"
 STEP_SEQUENCE=0
-STEP_TOTAL=12
+STEP_TOTAL=13
 LAST_RECORDED_PHASE=""
 DIAGNOSTIC_LOG_FILE=""
 declare -a SUMMARY_PHASES=()
@@ -41,6 +41,7 @@ declare -a SUMMARY_RESULTS=()
 declare -a SUMMARY_DURATIONS=()
 
 declare -A STEP_LABELS=(
+  [05-standardize-system]="Padronizar hostname, timezone e NO_PROXY"
   [10-prepare-host]="Preparar o host WSL e a rede do nó"
   [20-install-containerd]="Configurar o runtime containerd"
   [30-install-kubernetes]="Validar pacotes e ferramentas Kubernetes"
@@ -96,6 +97,10 @@ print_install_context() {
     "arquivo=${config_path} fingerprint=$(desired_state_fingerprint)"
   log_event INFO cluster desired \
     "node=${NODE_NAME}/${NODE_IP} kubernetes=${KUBERNETES_MINOR} pods=${POD_NETWORK_CIDR} services=${SERVICE_CIDR}"
+  log_event INFO system desired \
+    "hostname=${NODE_NAME} timezone=${SYSTEM_TIMEZONE} timeout_cluster=${CLUSTER_OPERATION_TIMEOUT} timeout_kubeadm=${KUBEADM_INIT_TIMEOUT}"
+  log_event INFO proxy desired \
+    "NO_PROXY=${K8S_NO_PROXY}"
   log_event INFO artifacts context \
     "modo=${cache_description} helm=${HELM_VERSION} flannel=${FLANNEL_VERSION} envoy=${ENVOY_GATEWAY_VERSION}"
   log_event INFO logger context \
@@ -186,6 +191,7 @@ mark_step_complete "00-preflight"
 finish_phase validated "Host e configuração aprovados"
 
 steps=(
+  05-standardize-system.sh
   10-prepare-host.sh
   20-install-containerd.sh
   30-install-kubernetes.sh

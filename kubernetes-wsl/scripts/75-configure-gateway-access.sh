@@ -32,6 +32,8 @@ EOF
 }
 
 render_unit() {
+  local escaped_no_proxy
+  escaped_no_proxy="$(systemd_escape_environment_value "${K8S_NO_PROXY}")"
   cat <<EOF
 [Unit]
 Description=Envoy Gateway HTTP restricted to localhost for Windows/WSL
@@ -42,6 +44,8 @@ After=network-online.target kubelet.service ${WSL_NODE_IP_SERVICE}
 Type=simple
 User=${ADMIN_USER}
 Group=${admin_group}
+Environment="NO_PROXY=${escaped_no_proxy}"
+Environment="no_proxy=${escaped_no_proxy}"
 ExecStart=${helper_file}
 Restart=always
 RestartSec=5s
