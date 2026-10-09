@@ -47,7 +47,7 @@ nano cluster.env
 sudo bash install-all.sh cluster.env
 ```
 
-Preencha `NODE_IP`, `RANCHER_URL` e, opcionalmente, `HEADLAMP_HOST` com um nome DNS apontado para a VM. `HEADLAMP_HOST` vazio usa o IP. Se Rancher usa uma CA privada, configure `RANCHER_CA_FILE` com o caminho absoluto da CA pública antes da instalação.
+Preencha `NODE_IP`, `RANCHER_URL` e, opcionalmente, `HEADLAMP_HOST` com um nome DNS apontado para a VM. `HEADLAMP_HOST` vazio usa o IP. O instalador descobre os resolvedores e a versão do Rancher e trata a confiança TLS conforme esse endpoint. Para uma CA privada nova, confirme seu fingerprint na instalação ou forneça uma CA confiável em `RANCHER_CA_FILE`.
 
 Os parâmetros são definidos no momento da instalação. **Depois do bootstrap**, `NODE_IP`, `NODE_NAME` e as redes de Pods/Services precisam permanecer estáveis. Use reserva DHCP quando o IP vier de DHCP. Uma troca posterior do IP exige planejar a migração de certificados, kubeconfigs e identidade do nó; reexecutar o instalador não faz essa migração.
 
@@ -91,6 +91,11 @@ sudo env K8S_CONFIG_FILE="$PWD/cluster.env" bash scripts/80-register-rancher.sh
 Também pode reexecutar `sudo bash install-all.sh cluster.env`. O script confere TLS de `/ping`, o destino `CATTLE_SERVER` e os agentes. Confirme o estado **Active** na interface do Rancher. Sem o manifesto, o cluster e seus acessos são instalados e o registro é apresentado como **PENDENTE**. Não há credencial de importação de exemplo.
 
 Para detalhes de CA pública/privada e confiança dos agentes, veja [rancher/README.md](rancher/README.md). A VM e os Pods precisam resolver e alcançar a URL do Rancher; um teste de `/ping` no host não prova o caminho de rede dos Pods.
+
+O fluxo é genérico: DNS automático usa os resolvedores reais da VM, a versão
+Rancher é descoberta por HTTPS e as CAs aprovadas ficam fora do Git, vinculadas
+à URL da instalação. Não há domínios, IPs ou certificados de empresa no
+projeto. Veja [reconciliação DNS/TLS e diagnóstico](rancher/README.md).
 
 ## Rede e aplicações HML
 

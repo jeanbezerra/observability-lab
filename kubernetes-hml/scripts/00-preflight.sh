@@ -56,14 +56,16 @@ kubernetes_minor_number="${KUBERNETES_MINOR#v1.}"
 if (( 10#${kubernetes_minor_number} < 34 || 10#${kubernetes_minor_number} > 36 )); then
   die "esta matriz HML com Rancher 2.15.2 e Envoy Gateway exige Kubernetes v1.34 a v1.36."
 fi
-[[ "${RANCHER_VERSION}" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] \
-  || die "RANCHER_VERSION deve informar uma release estável como v2.15.2."
-rancher_major=$((10#${BASH_REMATCH[1]}))
-rancher_minor=$((10#${BASH_REMATCH[2]}))
-rancher_patch=$((10#${BASH_REMATCH[3]}))
-(( rancher_major > 2 || (rancher_major == 2 && rancher_minor > 15) \
-  || (rancher_major == 2 && rancher_minor == 15 && rancher_patch >= 2) )) \
-  || die "a referência Rancher para HML exige v2.15.2 ou superior; confira About e a matriz do servidor."
+if [[ "${RANCHER_VERSION}" != auto ]]; then
+  [[ "${RANCHER_VERSION}" =~ ^v?([0-9]{1,6})\.([0-9]{1,6})\.([0-9]{1,6})$ ]] \
+    || die "RANCHER_VERSION deve ser auto ou uma release estável como v2.15.2."
+  rancher_major=$((10#${BASH_REMATCH[1]}))
+  rancher_minor=$((10#${BASH_REMATCH[2]}))
+  rancher_patch=$((10#${BASH_REMATCH[3]}))
+  (( rancher_major > 2 || (rancher_major == 2 && rancher_minor > 15) \
+    || (rancher_major == 2 && rancher_minor == 15 && rancher_patch >= 2) )) \
+    || die "a referência Rancher para HML exige v2.15.2 ou superior; confira a matriz do servidor."
+fi
 valid_ipv4_cidr "${POD_NETWORK_CIDR}" || die "POD_NETWORK_CIDR inválido."
 valid_ipv4_cidr "${SERVICE_CIDR}" || die "SERVICE_CIDR inválido."
 valid_ipv4 "${NODE_IP}" || die "NODE_IP inválido ou ausente. Informe um IPv4 atual da VM durante a instalação."

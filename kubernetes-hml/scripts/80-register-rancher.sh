@@ -4,6 +4,10 @@
 set +x
 # shellcheck source=lib/common.sh
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
+# shellcheck source=lib/rancher-endpoint.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/rancher-endpoint.sh"
+# shellcheck source=lib/rancher-version.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/rancher-version.sh"
 
 require_root
 [[ $# -le 1 && ( $# -eq 0 || "${1}" == "--check" ) ]] \
@@ -11,7 +15,7 @@ require_root
 
 RANCHER_URL="${RANCHER_URL:-}"
 RANCHER_URL="${RANCHER_URL%/}"
-RANCHER_VERSION="${RANCHER_VERSION:-v2.15.2}"
+RANCHER_VERSION="${RANCHER_VERSION:-auto}"
 RANCHER_IMPORT_MANIFEST="${RANCHER_IMPORT_MANIFEST:-}"
 RANCHER_CA_FILE="${RANCHER_CA_FILE:-}"
 RANCHER_ROLLOUT_TIMEOUT="${RANCHER_ROLLOUT_TIMEOUT:-${CLUSTER_OPERATION_TIMEOUT}}"
@@ -19,18 +23,10 @@ readonly import_hash_file="${BOOTSTRAP_STATE_DIR}/rancher-import.sha256"
 
 valid_https_url "${RANCHER_URL}" \
   || die "RANCHER_URL deve ser HTTPS com hostname/IP e porta opcional, sem credenciais, caminho ou query."
-[[ "${RANCHER_VERSION}" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] \
-  || die "RANCHER_VERSION deve informar uma versão estável, por exemplo v2.15.2."
-version_major=$((10#${BASH_REMATCH[1]}))
-version_minor=$((10#${BASH_REMATCH[2]}))
-version_patch=$((10#${BASH_REMATCH[3]}))
-(( version_major > 2 || (version_major == 2 && version_minor > 15) \
-  || (version_major == 2 && version_minor == 15 && version_patch >= 2) )) \
-  || die "Use Rancher v2.15.2 ou superior compatível com Kubernetes ${KUBERNETES_MINOR}; confira a matriz da release."
-
 require_command python3
 require_command sha256sum
 require_command kubectl
+load_rancher_version
 temporary_dir="$(mktemp -d)"
 trap 'rm -f -- "${temporary_dir}/live.json" "${temporary_dir}/desired.json" "${temporary_dir}/hash"; rmdir -- "${temporary_dir}"' EXIT
 
@@ -78,9 +74,13 @@ if mode == "manifest":
                 reject("O arquivo contém outro workload; esta etapa nunca instala o servidor Rancher.")
             pod_spec = resource.get("spec", {}).get("template", {}).get("spec", {})
             for container in pod_spec.get("containers", []) + pod_spec.get("initContainers", []):
-                image_name = container.get("image", "").split("@", 1)[0].rsplit("/", 1)[-1].split(":", 1)[0]
+                image_reference = container.get("image", "").split("@", 1)[0].rsplit("/", 1)[-1]
+                image_name = image_reference.split(":", 1)[0]
                 if image_name != "rancher-agent":
                     reject("Os workloads de importação devem executar apenas rancher-agent, nunca o servidor Rancher.")
+                image_tag = image_reference.partition(":")[2]
+                if not re.fullmatch(r"v?\d+\.\d+\.\d+", image_tag) or image_tag.lstrip("v") != wanted_version.lstrip("v"):
+                    reject("Toda imagem de agente no manifesto deve informar a versão real do Rancher resolvida para esta URL; gere o YAML Generic novamente.")
             workload_servers = [env.get("value", "").rstrip("/") for container in pod_spec.get("containers", [])
                                 for env in container.get("env", []) if env.get("name") == "CATTLE_SERVER"]
             if workload_servers != [wanted_url]:
@@ -110,32 +110,16 @@ if tag:
     if not match or tuple(map(int, match.groups())) < (2, 15, 2):
         reject("A imagem do agente deve usar uma release estável Rancher v2.15.2 ou superior compatível com o cluster.")
     if mode == "manifest" and tag.lstrip("v") != wanted_version.lstrip("v"):
-        reject("A versão da imagem no manifesto difere de RANCHER_VERSION; confirme About no servidor e ajuste a configuração.")
+        reject("A versão da imagem no manifesto difere da versão real do Rancher resolvida para esta URL; gere novamente o manifesto Generic no servidor correto.")
 elif "@sha256:" not in image:
     reject("A imagem do agente deve informar versão estável ou digest explícito.")
 PY
 }
 
-validate_rancher_endpoint() {
-  local ping_response
-  local -a curl_options=(--fail --silent --show-error --proto '=https' --connect-timeout 15 --max-time 30)
-  require_command curl
-  if [[ -n "${RANCHER_CA_FILE}" ]]; then
-    [[ -f "${RANCHER_CA_FILE}" && -r "${RANCHER_CA_FILE}" ]] \
-      || die "RANCHER_CA_FILE deve apontar para a cadeia CA pública local em PEM."
-    curl_options+=(--cacert "${RANCHER_CA_FILE}")
-  fi
-  if ! ping_response="$(curl "${curl_options[@]}" "${RANCHER_URL}/ping" 2>/dev/null)" \
-    || [[ "${ping_response}" != "pong" ]]; then
-    die "Rancher não respondeu pong em /ping com TLS válido; verifique DNS, saída HTTPS e a cadeia CA."
-  fi
-  log "Endpoint /ping do Rancher externo validado com TLS; versão declarada ${RANCHER_VERSION}, a conferir em About."
-}
-
 print_import_instructions() {
   check_pending "PENDENTE: importação Generic ainda não configurada; cluster continua operacional."
   log "No Rancher externo: Cluster Management > Import Existing > Generic; crie o cluster HML."
-  log "Confirme a versão real em About e ajuste RANCHER_VERSION; referência verificada: v2.15.2."
+  log "RANCHER_VERSION=auto descobre a versão real por HTTPS; referência mínima deste instalador: v2.15.2."
   log "CA pública: Global Settings > agent-tls-mode = system-store; strict também exige cacerts preenchido no Rancher."
   log "CA privada: configure strict e a cadeia em cacerts no servidor Rancher; RANCHER_CA_FILE só valida TLS no host desta VM."
   log "Salve o YAML da URL de importação fornecida pela UI em arquivo local protegido (chmod 600); não versione URL, token ou YAML."
@@ -154,8 +138,17 @@ if [[ -s "${temporary_dir}/live.json" ]]; then
   fi
 fi
 
+dns_arguments=()
+if check_requested "${1:-}"; then
+  dns_arguments=(--check)
+fi
+bash "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/79-configure-rancher-dns.sh" "${dns_arguments[@]}" \
+  || die "DNS opcional do Rancher não passou na configuração/verificação; registro preservado."
+
 if ! check_requested "${1:-}"; then
+  prepare_rancher_ca
   validate_rancher_endpoint
+  discover_rancher_version
 fi
 
 if [[ -z "${RANCHER_IMPORT_MANIFEST}" && "${agent_exists}" == "false" ]]; then
@@ -165,6 +158,7 @@ fi
 
 manifest_hash=""
 if [[ -n "${RANCHER_IMPORT_MANIFEST}" ]]; then
+  require_resolved_rancher_version
   [[ -f "${RANCHER_IMPORT_MANIFEST}" && -r "${RANCHER_IMPORT_MANIFEST}" ]] \
     || die "RANCHER_IMPORT_MANIFEST deve apontar para um arquivo YAML local legível."
   # Não deixe kubectl imprimir erros contendo o manifesto ou dados de Secrets.

@@ -1,55 +1,123 @@
-# Registrar HML no Rancher externo
+# Registrar HML em um Rancher externo
 
-Esta variante instala Kubernetes com kubeadm e registra um cluster **Generic** em
-um Rancher já existente em outra máquina. Não instala o servidor Rancher no cluster.
-Workloads, projetos e RBAC podem ser administrados no Rancher; upgrades de Kubernetes,
-nós e backups continuam sob responsabilidade do kubeadm. A referência verificada é
-**Rancher v2.15.2**, cuja matriz certifica importação Kubernetes **1.34–1.36**.
-Confira a versão real em **About** e a matriz da release antes de configurar outra versão.
+Esta variante instala Kubernetes com kubeadm e registra um cluster **Generic**
+em um Rancher existente. URL, IP da VM, DNS e certificados pertencem à
+configuração local de cada instalação. Não há perfil de empresa nem CA de
+ambiente distribuída com o projeto.
 
-No `cluster.env`, informe `RANCHER_URL=https://rancher.exemplo.interno` e
-`RANCHER_VERSION=v2.15.2`. O nome precisa resolver e os Pods/agentes precisam alcançar
-o Rancher por HTTPS, geralmente porta 443, inclusive com WebSocket no proxy externo.
+O Rancher administra workloads, projetos e RBAC. Upgrades Kubernetes, nós e
+backups do etcd continuam sob responsabilidade do kubeadm. A matriz de
+referência Rancher **v2.15.2** certifica importação Kubernetes **1.34–1.36**;
+confira a matriz da release descoberta antes de usar outra combinação.
 
-1. No Rancher, abra **Cluster Management > Import Existing > Generic** e crie HML.
-2. Configure a confiança dos agentes no servidor externo: com CA pública, use
-   **Global Settings > agent-tls-mode > system-store**, ou configure `cacerts` também
-   para usar `strict`. Com CA privada, use `strict` e publique a cadeia CA em `cacerts`
-   conforme a instalação do Rancher. Não altere essa configuração global sem considerar
-   os clusters já registrados.
-3. A UI fornece uma URL única de importação. Salve seu conteúdo YAML em um arquivo
-   local protegido na VM, por exemplo `/root/rancher-hml-import.yaml`, usando HTTPS
-   validado. Para CA privada, `curl --cacert /root/rancher-ca.pem --output /root/rancher-hml-import.yaml`
-   pode ser usado com a URL fornecida pela UI. Não use `--insecure` ou pipelines de execução.
-   Proteja com `chmod 600 /root/rancher-hml-import.yaml`.
-4. Configure `RANCHER_IMPORT_MANIFEST=/root/rancher-hml-import.yaml` no `cluster.env`.
-   Para validar `/ping` com uma CA privada, informe também
-   `RANCHER_CA_FILE=/root/rancher-ca.pem`.
-5. Execute `sudo bash install-all.sh cluster.env` e confirme **Active** na UI do Rancher.
+## Configuração e reconciliação automáticas
 
-O YAML e a URL de importação contêm credenciais; mantenha-os fora do Git e dos logs.
-A etapa 80 verifica o arquivo antes de aplicá-lo, confere `CATTLE_SERVER`, aguarda o
-rollout e registra somente seu SHA-256. Não redireciona agentes de outro Rancher.
-`RANCHER_CA_FILE` confere TLS no host da VM; ele **não** configura a confiança dos
-agentes dentro dos containers. Um rollout pronto também não comprova conexão com o
-Rancher: **Active** é a confirmação final no servidor externo.
+O instalador solicita o IPv4 real da VM e a URL HTTPS do Rancher quando faltam
+em `cluster.env`. Os demais padrões são genéricos:
 
-Sem `RANCHER_IMPORT_MANIFEST`, a instalação valida `/ping` com TLS e informa
-**PENDENTE** sem falhar quando o Rancher responde corretamente.
-Se já existir um agente, verifica seu destino e rollout mesmo sem o arquivo. Nesse
-caso, a variante conserva o registro existente e não executa uma nova importação.
-O `--check` não consulta `/ping`; usa somente a API do cluster e o hash local.
+| Parâmetro | Padrão | Comportamento |
+| --- | --- | --- |
+| `RANCHER_URL` | Coletado na instalação | Endpoint externo HTTPS, sem credenciais ou caminhos |
+| `RANCHER_VERSION` | `auto` | Descobre a versão pelo endpoint HTTPS e verifica o manifesto |
+| `RANCHER_DNS_MODE` | `auto` | Descobre e testa os resolvedores da VM |
+| `RANCHER_DNS_SERVERS` | Vazio | Permite indicar resolvedores específicos da instalação |
+| `RANCHER_CA_AUTO_DISCOVER` | `true` | Descobre a CA publicada pelo Rancher se faltar confiança |
+| `RANCHER_CA_FILE` | Vazio | Permite fornecer uma cadeia CA confiável em PEM |
+| `RANCHER_CA_FINGERPRINT` | Vazio | Confirma a identidade da CA em execução não interativa |
+| `RANCHER_IMPORT_MANIFEST` | Vazio | Caminho do YAML Generic; vazio deixa o registro pendente |
 
-O Flannel padrão preservado da variante WSL não aplica `NetworkPolicy`. Habilite
-isolamento de projetos somente após adicionar um controlador de políticas compatível.
+### DNS
 
-Para verificar regressões da etapa de registro sem rede, API ou privilégios de root,
-execute `bash tests/rancher-registration.sh` a partir de `kubernetes-hml`.
+No modo automático, a etapa 79 consulta os resolvedores reais do host, sem usar
+o stub de loopback do systemd como servidor dos Pods. Testa cada resolvedor para
+o hostname do Rancher e seleciona os que correspondem à resolução do host.
+Isso evita encaminhar um nome interno a um DNS público que retorna NXDOMAIN.
+
+O CoreDNS recebe um bloco identificado apenas para o hostname configurado. O
+endereço do Rancher continua sendo obtido pelo DNS; as demais zonas e dados do
+ConfigMap são preservados. A reexecução redescobre o ambiente e reconcilia
+mudanças. O modo `off` preserva o DNS existente; uma lista explícita de
+`RANCHER_DNS_SERVERS` permite substituir a descoberta.
+
+Antes de alterar o Corefile, a etapa cria um backup privado. Só reinicia o
+Deployment se o Corefile mudar, aguarda sua disponibilidade e grava o estado
+após o sucesso. Blocos personalizados conflitantes não são sobrescritos.
+
+### Certificados
+
+Certificados emitidos por CAs já confiáveis no sistema funcionam diretamente.
+Quando a confiança falta, a etapa consulta a CA pública publicada pelo Rancher,
+valida o formato, a capacidade de assinar certificados e a validade, e testa
+a cadeia e o hostname com essa CA.
+
+Essa descoberta não comprova a identidade da CA. Na primeira utilização de uma
+CA privada, confirme o fingerprint mostrado com o administrador do servidor.
+A instalação interativa pede essa confirmação; sem terminal, forneça
+`RANCHER_CA_FILE` confiável ou `RANCHER_CA_FINGERPRINT` previamente conferido.
+Uma rotação de CA exige uma nova confirmação.
+O fingerprint é SHA-256 do certificado DER para uma CA; em uma cadeia com
+várias CAs, é SHA-256 dos DER concatenados na ordem publicada.
+
+A CA aprovada fica em `BOOTSTRAP_STATE_DIR`, fora do Git, associada à URL da
+instalação. Os testes finais de `/ping` sempre validam TLS e exigem **200/pong**.
+Certificado expirado, hostname incorreto, redirects e resposta inesperada
+interrompem o registro com diagnóstico. O script não altera a PKI do servidor
+nem instala confiança global no sistema.
+
+A confiança dos agentes nos containers depende de `cacerts` e
+`agent-tls-mode` no servidor Rancher, separadamente da confiança do host.
+Com CA privada, configure `strict` e a cadeia CA em `cacerts`. Com CA pública,
+use `system-store` ou publique a CA para usar `strict`. Considere os clusters
+existentes antes de alterar uma configuração global do Rancher.
+
+## Importar o cluster
+
+1. No Rancher, abra **Cluster Management > Import Existing > Generic** e crie o registro HML.
+2. Salve o YAML da URL de importação em um arquivo local protegido na VM, fora do Git. Valide HTTPS ao baixar e aplique `chmod 600`.
+3. Informe o caminho absoluto em `RANCHER_IMPORT_MANIFEST` no `cluster.env`.
+4. Execute a etapa de registro ou reexecute o instalador:
+
+```bash
+sudo env K8S_CONFIG_FILE="$PWD/cluster.env" bash scripts/80-register-rancher.sh
+# Ou:
+sudo bash install-all.sh cluster.env
+```
+
+O YAML e a URL de importação contêm credenciais. A etapa valida namespace,
+workloads, imagem e `CATTLE_SERVER` antes de aplicar; registra somente o hash
+do arquivo e não redireciona um agente existente para outro Rancher.
+
+Sem manifesto e sem agente, o instalador testa o endpoint e apresenta
+**PENDENTE**. Um rollout pronto não comprova conexão upstream: confirme
+**Active** no servidor Rancher.
+
+## Diagnóstico
+
+Teste somente leitura, sem kubeconfig. Use sudo se a CA autorizada estiver
+no estado protegido do instalador root:
+
+```bash
+K8S_CONFIG_FILE="$PWD/cluster.env" bash test-rancher.sh
+# Também aceita URL e uma CA local opcional:
+bash test-rancher.sh https://rancher.example.org /caminho/ca-confiavel.crt
+```
+
+A opção `--configure-ca` habilita explicitamente a descoberta e a gravação da
+CA aprovada. O modo comum só usa a confiança existente e não altera o ambiente.
+
+Erros distinguem DNS, TCP, timeout, TLS, HTTP e corpo inesperado sem imprimir
+respostas arbitrárias ou credenciais. O `--check` da etapa 80 usa a API do
+cluster e o estado local da última reconciliação, sem chamadas ao Rancher ou
+nova descoberta DNS/CA. Depois de mudar o ambiente, execute o modo normal para
+reconciliar antes de verificar.
+
+O Flannel padrão não aplica NetworkPolicy. Habilite isolamento de projetos
+somente após adicionar um controlador compatível.
 
 Referências oficiais:
 
 - [Matriz Rancher v2.15.2](https://www.suse.com/suse-rancher/support-matrix/all-supported-versions/rancher-v2-15-2/).
-- [Registro e capacidades dos clusters Generic](https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/kubernetes-clusters-in-rancher-setup/register-existing-clusters).
+- [Registro de clusters Generic](https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/kubernetes-clusters-in-rancher-setup/register-existing-clusters).
 - [Agent TLS Enforcement](https://ranchermanager.docs.rancher.com/getting-started/installation-and-upgrade/installation-references/tls-settings).
-- [CA privada e atualização dos agentes](https://ranchermanager.docs.rancher.com/getting-started/installation-and-upgrade/resources/update-rancher-certificate).
-- [Políticas de rede no Flannel](https://github.com/flannel-io/flannel/blob/master/Documentation/netpol.md).
+- [Atualização de certificados Rancher](https://ranchermanager.docs.rancher.com/getting-started/installation-and-upgrade/resources/update-rancher-certificate).
+- [Encaminhamento DNS](https://coredns.io/plugins/forward/).
