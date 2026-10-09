@@ -221,3 +221,8 @@ autoProxy=true
 
 Depois execute `05-apply-mirrored-network.cmd`, valide com
 `00-check-environment.cmd` e reabra somente o túnel necessário.
+
+Antes de preparar/instalar o WSL, execute `02-prepare-clock.cmd` em CMD
+Administrador. Ele configura o fuso de S?o Paulo e os pools NTP brasileiros
+do Windows Time. Pol?ticas corporativas s?o preservadas; confirme a
+sincroniza??o antes de iniciar o instalador Linux.

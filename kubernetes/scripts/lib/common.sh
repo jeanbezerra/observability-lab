@@ -73,10 +73,13 @@ AUTO_REPAIR_PARTIAL_CLUSTER="${AUTO_REPAIR_PARTIAL_CLUSTER:-true}"
 KUBECONFIG_ADMIN="${KUBECONFIG_ADMIN:-/etc/kubernetes/admin.conf}"
 BOOTSTRAP_STATE_DIR="${BOOTSTRAP_STATE_DIR:-/var/lib/k8s-bootstrap}"
 
+# shellcheck source=host-preflight.sh
+source "${LIB_DIR}/host-preflight.sh"
+
 readonly LIB_DIR SCRIPTS_DIR PROJECT_DIR
 
 log() {
-  printf '\033[1;34m[%s]\033[0m %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+  printf '\033[1;34m[%s]\033[0m %s\n' "$(date --iso-8601=seconds)" "$*"
 }
 
 warn() {
@@ -90,6 +93,7 @@ die() {
 
 require_root() {
   [[ "${EUID}" -eq 0 ]] || die "execute este script como root (use sudo)."
+  host_preflight_for_stage
 }
 
 require_command() {

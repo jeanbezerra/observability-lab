@@ -475,3 +475,22 @@ Se o evento também mencionar `/run/flannel/subnet.env`, a etapa 50 agora detect
 - [Headlamp in-cluster](https://headlamp.dev/docs/latest/installation/in-cluster/)
 - [OIDC no Headlamp](https://headlamp.dev/docs/latest/installation/in-cluster/oidc/)
 - [Autenticação OIDC estruturada do Kubernetes](https://kubernetes.io/docs/reference/access-authn-authz/authentication/)
+
+## Hor?rio e disco antes da instala??o
+
+Antes de instalar/reconciliar qualquer componente, o instalador configura
+`America/Sao_Paulo`, usa os pools NTP brasileiros `0.br.pool.ntp.org` a
+`3.br.pool.ntp.org` e exige sincroniza??o confirmada. Os timestamps dos logs
+incluem o offset de S?o Paulo. A imagem Ubuntu precisa ter Python 3, util-linux
+e Chrony ou systemd-timesyncd previamente dispon?veis; o instalador n?o instala
+pacotes para contornar uma falha de rel?gio.
+
+`HOST_DISK_AUTO_EXPAND=true` expande automaticamente a raiz em layout simples:
+?ltima parti??o raiz/PV, PV, todo o espa?o livre do VG e filesystem ext4/XFS.
+Cria backups de tabela/metadados em `/var/lib/installer-host/backups`. N?o move
+outras parti??es nem toma espa?o de outros LVs. Layouts amb?guos, criptografados,
+RAID, multi-PV ou thin/snapshot exigem corre??o manual antes de continuar.
+Aproveitar o disco significa alocar sua capacidade, n?o preench?-lo com dados;
+os limites de espa?o livre para instalar continuam sendo verificados depois.
+`--check` apenas verifica; `HOST_DISK_AUTO_EXPAND=false` bloqueia quando houver
+capacidade n?o alocada. Ferramentas de expans?o necess?rias devem estar na imagem.

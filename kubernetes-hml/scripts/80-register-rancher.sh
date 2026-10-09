@@ -116,6 +116,44 @@ elif "@sha256:" not in image:
 PY
 }
 
+# Reconhece apenas o tipo de um export Rancher, sem interpretar credenciais.
+# A validacao completa do manifesto continua a cargo do kubectl e do inspector.
+is_rancher_cluster_export() {
+  python3 - "$1" <<'PY'
+import json
+import re
+import sys
+
+def exported(resource):
+    return (isinstance(resource, dict) and resource.get("kind") == "Cluster"
+            and str(resource.get("apiVersion", "")).split("/", 1)[0]
+            in {"management.cattle.io", "provisioning.cattle.io"})
+
+try:
+    with open(sys.argv[1], encoding="utf-8-sig") as source:
+        text = source.read(1048576)
+    if text.lstrip().startswith("{"):
+        document = json.loads(text)
+        resources = document.get("items", []) if document.get("kind") == "List" else [document]
+        sys.exit(0 if any(exported(resource) for resource in resources) else 1)
+    headers = {}
+    for line in text.splitlines() + ["---"]:
+        if re.fullmatch(r"(?:---|\.\.\.)(?:[ \t]*(?:#.*)?)?", line):
+            if exported(headers):
+                sys.exit(0)
+            headers = {}
+            continue
+        match = re.fullmatch(r"(apiVersion|kind):[ \t]*(?:'([A-Za-z0-9./_-]+)'|"
+                             r'"([A-Za-z0-9./_-]+)"|([A-Za-z0-9./_-]+))'
+                             r"[ \t]*(?:#.*)?", line)
+        if match:
+            headers[match.group(1)] = next(value for value in match.groups()[1:] if value is not None)
+except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+    pass
+sys.exit(1)
+PY
+}
+
 print_import_instructions() {
   check_pending "PENDENTE: importação Generic ainda não configurada; cluster continua operacional."
   log "No Rancher externo: Cluster Management > Import Existing > Generic; crie o cluster HML."
@@ -157,19 +195,30 @@ if [[ -z "${RANCHER_IMPORT_MANIFEST}" && "${agent_exists}" == "false" ]]; then
 fi
 
 manifest_hash=""
+manifest_already_imported=false
 if [[ -n "${RANCHER_IMPORT_MANIFEST}" ]]; then
-  require_resolved_rancher_version
   [[ -f "${RANCHER_IMPORT_MANIFEST}" && -r "${RANCHER_IMPORT_MANIFEST}" ]] \
     || die "RANCHER_IMPORT_MANIFEST deve apontar para um arquivo YAML local legível."
-  # Não deixe kubectl imprimir erros contendo o manifesto ou dados de Secrets.
-  if ! kube create --dry-run=client --validate=false -f "${RANCHER_IMPORT_MANIFEST}" \
-    -o json >"${temporary_dir}/desired.json" 2>/dev/null; then
-    die "YAML de importação inválido; mensagem do kubectl omitida para proteger credenciais. Revise o arquivo local."
-  fi
-  if ! inspection_error="$(inspect_agent_json manifest "${temporary_dir}/desired.json" 2>&1)"; then
-    die "${inspection_error}"
-  fi
   manifest_hash="$(sha256sum -- "${RANCHER_IMPORT_MANIFEST}" | awk '{print $1}')"
+  if [[ "${agent_exists}" == "true" && -r "${import_hash_file}" ]] \
+    && [[ "$(cat -- "${import_hash_file}")" == "${manifest_hash}" ]]; then
+    # O Rancher substitui recursos do bootstrap e pode atualizar a imagem do
+    # agente. Um manifesto já validado não deve desfazer essa reconciliação.
+    manifest_already_imported=true
+  else
+    require_resolved_rancher_version
+    if is_rancher_cluster_export "${RANCHER_IMPORT_MANIFEST}"; then
+      die "O arquivo é um export do objeto Cluster do Rancher, não o manifesto de importação. No Rancher externo, abra Registration do cluster Generic e obtenha o YAML da URL /v3/import/...yaml exibida no comando; configure RANCHER_IMPORT_MANIFEST com esse arquivo protegido."
+    fi
+    # Não deixe kubectl imprimir erros contendo o manifesto ou dados de Secrets.
+    if ! kube create --dry-run=client --validate=false -f "${RANCHER_IMPORT_MANIFEST}" \
+      -o json >"${temporary_dir}/desired.json" 2>/dev/null; then
+      die "Não foi possível interpretar/mapear o manifesto Generic na API Kubernetes. Valide o arquivo de importação, os tipos de recursos e o acesso à API; detalhes do kubectl omitidos para proteger credenciais."
+    fi
+    if ! inspection_error="$(inspect_agent_json manifest "${temporary_dir}/desired.json" 2>&1)"; then
+      die "${inspection_error}"
+    fi
+  fi
 fi
 
 if check_requested "${1:-}"; then
@@ -185,7 +234,9 @@ if check_requested "${1:-}"; then
   exit 0
 fi
 
-if [[ -n "${RANCHER_IMPORT_MANIFEST}" ]]; then
+if [[ "${manifest_already_imported}" == "true" ]]; then
+  log "Manifesto Generic já aplicado; recursos do agente administrados pelo Rancher serão preservados."
+elif [[ -n "${RANCHER_IMPORT_MANIFEST}" ]]; then
   if ! kube apply -f "${RANCHER_IMPORT_MANIFEST}" >/dev/null 2>&1; then
     die "Falha ao aplicar o YAML de importação local; detalhes omitidos para proteger credenciais."
   fi

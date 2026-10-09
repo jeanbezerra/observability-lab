@@ -31,6 +31,8 @@ find "${ROOT_DIR}/manifests" -type f -exec chmod 0640 {} +
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT_DIR}/scripts/lib/common.sh"
 
+host_preflight
+
 if command -v flock >/dev/null 2>&1; then
   exec 9>/run/lock/k8s-bootstrap.lock
   flock -n 9 || die "já existe outra execução do instalador em andamento."

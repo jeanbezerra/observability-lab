@@ -2,6 +2,7 @@
 
 set -Eeuo pipefail
 umask 077
+export TZ=America/Sao_Paulo
 
 [[ "${EUID}" -eq 0 ]] || {
   printf 'ERRO: execute como root.\n' >&2
@@ -17,7 +18,7 @@ source /etc/keycloak/backup.env
 backup_dir="${KEYCLOAK_BACKUP_DIR:-/var/backups/keycloak}"
 database_name="${KEYCLOAK_DB_NAME:-keycloak}"
 retention_days="${BACKUP_RETENTION_DAYS:-14}"
-timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+timestamp="$(date '+%Y%m%dT%H%M%S%z')"
 final_file="${backup_dir}/keycloak-${timestamp}.dump"
 
 install -d -o root -g root -m 0700 "${backup_dir}"

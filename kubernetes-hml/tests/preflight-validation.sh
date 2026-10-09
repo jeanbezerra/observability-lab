@@ -11,6 +11,8 @@ cp -- "${ROOT_DIR}/configure-install.sh" "${fixture_dir}/configure-install.sh"
 cp -- "${ROOT_DIR}/.env.example" "${fixture_dir}/.env.example"
 cp -- "${ROOT_DIR}/scripts/00-preflight.sh" "${fixture_dir}/scripts/00-preflight.sh"
 cp -- "${ROOT_DIR}/scripts/lib/common.sh" "${fixture_dir}/scripts/lib/common.sh"
+cp -- "${ROOT_DIR}/scripts/lib/host-preflight.sh" "${ROOT_DIR}/scripts/lib/host-storage.py" \
+  "${ROOT_DIR}/scripts/lib/windows-time.ps1" "${fixture_dir}/scripts/lib/"
 
 # Evita depender de endereço da máquina onde a regressão está sendo executada.
 # O preflight copiado continua real, mas não exige privilégios para testar a

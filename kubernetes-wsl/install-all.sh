@@ -24,6 +24,8 @@ fi
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT_DIR}/scripts/lib/common.sh"
 
+host_preflight
+
 start_persistent_log deploy
 
 INSTALL_COMPLETED=false

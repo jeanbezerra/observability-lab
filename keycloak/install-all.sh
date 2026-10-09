@@ -30,6 +30,8 @@ find "${ROOT_DIR}/systemd" -type f -exec chmod 0640 {} +
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT_DIR}/scripts/lib/common.sh"
 
+host_preflight
+
 if command -v flock >/dev/null 2>&1; then
   exec 9>/run/lock/keycloak-bootstrap.lock
   flock -n 9 || die "já existe outra execução do instalador Keycloak em andamento."

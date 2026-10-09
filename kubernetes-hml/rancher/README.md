@@ -33,6 +33,15 @@ o stub de loopback do systemd como servidor dos Pods. Testa cada resolvedor para
 o hostname do Rancher e seleciona os que correspondem à resolução do host.
 Isso evita encaminhar um nome interno a um DNS público que retorna NXDOMAIN.
 
+Os DNS configurados na mesma interface da VM devem apresentar a mesma visão
+do hostname Rancher. Um DNS público que retorna NXDOMAIN não funciona como
+fallback para um nome interno: o resolvedor do host pode escolhê-lo e falhar
+de forma intermitente, mesmo com os agentes funcionando nos Pods. Configure
+DNS internos recursivos que resolvam os nomes internos e externos, ou split
+DNS explícito para o domínio correspondente. A reconciliação do CoreDNS não
+altera o DNS do host; se o próprio host não resolver o Rancher, corrija essa
+configuração antes de reexecutar o instalador.
+
 O CoreDNS recebe um bloco identificado apenas para o hostname configurado. O
 endereço do Rancher continua sendo obtido pelo DNS; as demais zonas e dados do
 ConfigMap são preservados. A reexecução redescobre o ambiente e reconcilia
@@ -83,9 +92,24 @@ sudo env K8S_CONFIG_FILE="$PWD/cluster.env" bash scripts/80-register-rancher.sh
 sudo bash install-all.sh cluster.env
 ```
 
+Para um registro já criado, abra sua página de **Registration** e use a URL
+`/v3/import/...yaml` do comando exibido. **Export YAML** baixa o objeto `Cluster`
+do servidor Rancher, que não registra os agentes no Kubernetes. Endereços
+`blob:` pertencem à sessão do navegador e não são URLs de importação.
+
+Se a aba **Registration** não aparecer, consulte a API no navegador autenticado:
+`https://<rancher>/v3/clusterregistrationtokens?clusterId=<id-do-cluster>`.
+Use a URL de importação do campo `command` ou `insecureCommand`, baixando o YAML
+com validação da CA. O ID está no objeto `Cluster` exportado ou na URL da página
+do cluster. Esse acesso recupera o registro existente.
+
 O YAML e a URL de importação contêm credenciais. A etapa valida namespace,
 workloads, imagem e `CATTLE_SERVER` antes de aplicar; registra somente o hash
 do arquivo e não redireciona um agente existente para outro Rancher.
+
+Quando o agente existe e o hash do manifesto já foi validado, a reexecução
+preserva os recursos reconciliados pelo Rancher e verifica o destino e o rollout.
+Isso mantém as credenciais, os volumes e as atualizações posteriores do agente.
 
 Sem manifesto e sem agente, o instalador testa o endpoint e apresenta
 **PENDENTE**. Um rollout pronto não comprova conexão upstream: confirme

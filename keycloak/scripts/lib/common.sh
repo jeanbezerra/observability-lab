@@ -93,10 +93,13 @@ KEYCLOAK_DB_URL="jdbc:postgresql://127.0.0.1:5432/${KEYCLOAK_DB_NAME}"
 OIDC_ISSUER_URL="${KEYCLOAK_EXTERNAL_URL}/realms/${OIDC_REALM}"
 HEADLAMP_OIDC_CALLBACK_URL="${HEADLAMP_EXTERNAL_URL%/}/oidc-callback"
 
+# shellcheck source=host-preflight.sh
+source "${LIB_DIR}/host-preflight.sh"
+
 readonly LIB_DIR SCRIPTS_DIR PROJECT_DIR KEYCLOAK_USER KEYCLOAK_GROUP
 
 log() {
-  printf '\033[1;34m[%s]\033[0m %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+  printf '\033[1;34m[%s]\033[0m %s\n' "$(date --iso-8601=seconds)" "$*"
 }
 
 warn() {
@@ -110,6 +113,7 @@ die() {
 
 require_root() {
   [[ "${EUID}" -eq 0 ]] || die "execute este script como root (use sudo)."
+  host_preflight_for_stage
 }
 
 require_command() {

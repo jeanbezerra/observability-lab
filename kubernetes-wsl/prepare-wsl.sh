@@ -18,6 +18,10 @@ if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "26.04" ]]; then
   exit 1
 fi
 
+# shellcheck source=scripts/lib/host-preflight.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/scripts/lib/host-preflight.sh"
+host_preflight
+
 export DEBIAN_FRONTEND=noninteractive
 missing_packages=()
 for package_name in systemd systemd-sysv; do

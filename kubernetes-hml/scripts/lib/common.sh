@@ -138,6 +138,10 @@ NO_PROXY="${K8S_NO_PROXY}"
 no_proxy="${K8S_NO_PROXY}"
 export NO_PROXY no_proxy
 
+# shellcheck source=host-preflight.sh
+source "${LIB_DIR}/host-preflight.sh"
+HOST_REQUIRE_VM=true
+
 readonly LIB_DIR SCRIPTS_DIR PROJECT_DIR OFFLINE_CACHE_FORMAT_VERSION K8S_NO_PROXY
 
 log_event() {
@@ -321,6 +325,7 @@ die() {
 
 require_root() {
   [[ "${EUID}" -eq 0 ]] || die "execute este script na VM Ubuntu com sudo."
+  host_preflight_for_stage
 }
 
 require_command() {

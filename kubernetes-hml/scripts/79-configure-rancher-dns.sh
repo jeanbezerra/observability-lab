@@ -64,7 +64,7 @@ if [[ "${corefile_changed}" == "true" ]]; then
   # automaticamente, pois outros administradores podem editar o CoreDNS.
   backup_dir="${BOOTSTRAP_STATE_DIR}/rancher-dns-backups"
   install -d -m 0700 -- "${BOOTSTRAP_STATE_DIR}" "${backup_dir}"
-  backup_file="$(mktemp "${backup_dir}/coredns-$(date -u '+%Y%m%dT%H%M%S').XXXXXX.json")"
+  backup_file="$(mktemp "${backup_dir}/coredns-$(date '+%Y%m%dT%H%M%S%z').XXXXXX.json")"
   install -m 0600 -- "${temporary_dir}/live.json" "${backup_file}"
   log "Backup privado do CoreDNS anterior ao patch: ${backup_file}."
 fi

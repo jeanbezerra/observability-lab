@@ -67,7 +67,7 @@ curl() {
   [[ -n "$output_file" ]] || return 97
   [[ -z "$RANCHER_CA_FILE" || "$ca_seen" == true ]] || return 96
   if [[ "$version_request" == true ]]; then
-    printf 'v2.15.2' > "$output_file"
+    printf '%s' "$MOCK_SERVER_VERSION" > "$output_file"
     printf '200'
     return 0
   fi
@@ -82,7 +82,13 @@ install() {
   if [[ "$1" == -d ]]; then mkdir -p -- "${@: -1}"; else cp -- "${@: -2:1}" "${@: -1}"; fi
 }
 kube() {
-  if [[ "${1:-}" == create ]]; then printf 'dryrun\n' >> "$MOCK_TRACE"; cat "$MOCK_DESIRED"
+  if [[ "${1:-}" == create ]]; then
+    printf 'dryrun\n' >> "$MOCK_TRACE"
+    if [[ "${MOCK_DRYRUN_FAILURE:-0}" != 0 ]]; then
+      printf '%s\n' "$MOCK_CURL_ERROR" >&2
+      return "$MOCK_DRYRUN_FAILURE"
+    fi
+    cat "$MOCK_DESIRED"
   elif [[ "${1:-}" == apply ]]; then printf 'apply\n' >> "$MOCK_TRACE"; cp "$MOCK_DESIRED" "$MOCK_LIVE"
   elif [[ "${3:-}" == get ]]; then printf 'get\n' >> "$MOCK_TRACE"; [[ ! -s "$MOCK_LIVE" ]] || cat "$MOCK_LIVE"
   elif [[ "${3:-}" == rollout ]]; then printf 'rollout\n' >> "$MOCK_TRACE"; return "${MOCK_ROLLOUT_FAILURE:-0}"
@@ -113,7 +119,8 @@ with tempfile.TemporaryDirectory(prefix="rancher-registration-") as temporary:
              expected=0, state=None, rollout_failure=False, curl_status=0,
              http_status="200", body="pong", curl_error=sentinel, ca=False,
              expected_message=None, xtrace=False, rancher_version="v2.15.2",
-             ca_auto=False, fingerprint="", curl_calls=None):
+             ca_auto=False, fingerprint="", curl_calls=None, manifest_text=None,
+             dryrun_failure=False, server_version="v2.15.2"):
         folder = base / name
         folder.mkdir()
         private_tmp = folder / "tmp"
@@ -121,6 +128,9 @@ with tempfile.TemporaryDirectory(prefix="rancher-registration-") as temporary:
         live, want, trace = (folder / filename for filename in ("live.json", "manifest.json", "trace.txt"))
         live.write_text(json.dumps(existing) if existing else "", encoding="utf-8")
         want.write_text(json.dumps(desired or agent()), encoding="utf-8")
+        manifest = folder / "import.yaml"
+        manifest.write_text(manifest_text if manifest_text is not None else want.read_text(encoding="utf-8"),
+                            encoding="utf-8", newline="")
         ca_path = folder / "ca.pem"
         if ca:
             ca_path.write_text("FAKE_PUBLIC_CA_FOR_OPTION_TEST\n", encoding="utf-8")
@@ -132,10 +142,11 @@ with tempfile.TemporaryDirectory(prefix="rancher-registration-") as temporary:
                    RANCHER_CA_AUTO_DISCOVER="true" if ca_auto else "false",
                    RANCHER_CA_FINGERPRINT=fingerprint, TMPDIR=private_tmp.as_posix(),
                    RANCHER_DNS_MODE="off", RANCHER_DNS_SERVERS="",
-                   RANCHER_IMPORT_MANIFEST=want.as_posix() if configured else "",
+                   RANCHER_IMPORT_MANIFEST=manifest.as_posix() if configured else "",
+                   MOCK_DRYRUN_FAILURE="1" if dryrun_failure else "0",
                    MOCK_ROLLOUT_FAILURE="1" if rollout_failure else "0",
                    MOCK_CURL_STATUS=str(curl_status), MOCK_HTTP_STATUS=http_status,
-                   MOCK_BODY=body, MOCK_CURL_ERROR=curl_error)
+                   MOCK_BODY=body, MOCK_CURL_ERROR=curl_error, MOCK_SERVER_VERSION=server_version)
         result = subprocess.run([bash_executable] + (["-x"] if xtrace else [])
                                 + [script.as_posix()] + (["--check"] if check else []),
                                 env=env, text=True, encoding="utf-8", capture_output=True, timeout=20)
@@ -207,14 +218,74 @@ with tempfile.TemporaryDirectory(prefix="rancher-registration-") as temporary:
                               rancher_version="auto", check=False, expected=1)
     assert "curl" not in foreign_calls
     case("first_check", configured=True, expected=1)
+    export_yaml = ("apiVersion: management.cattle.io/v3\nkind: Cluster\n"
+                   f"metadata:\n  name: sample\nspec:\n  token: {sentinel}\n")
+    for name, manifest in [
+        ("cluster_export_yaml", export_yaml),
+        ("cluster_export_json", json.dumps({"apiVersion": "management.cattle.io/v3", "kind": "Cluster",
+                                            "spec": {"token": sentinel}})),
+        ("cluster_export_quoted_bom_crlf", "\ufeff---\r\nkind: 'Cluster' # export\r\n"
+         f'apiVersion: "management.cattle.io/v3"\r\nspec:\r\n  token: {sentinel}\r\n'),
+        ("cluster_export_multiple_documents", "apiVersion: v1\nkind: Namespace\nmetadata:\n"
+         "  name: cattle-system\n---\n" + export_yaml),
+        ("cluster_export_json_list", json.dumps({"kind": "List", "items": [agent(),
+         {"apiVersion": "management.cattle.io/v3", "kind": "Cluster", "spec": {"token": sentinel}}]})),
+        ("cluster_export_provisioning", "apiVersion: provisioning.cattle.io/v1\nkind: Cluster\n")]:
+        _, export_calls, _ = case(name, configured=True, check=False, expected=1, manifest_text=manifest,
+                                  expected_message="export do objeto Cluster")
+        assert "dryrun" not in export_calls, (name, export_calls)
+    case("embedded_export_headers_not_resource", configured=True, check=False,
+         manifest_text="apiVersion: v1\nkind: ConfigMap\ndata:\n  example: |\n"
+         "    apiVersion: management.cattle.io/v3\n    kind: Cluster\n")
+    _, failed_dryrun_calls, _ = case("dryrun_error_sanitized", configured=True, check=False,
+                                    expected=1, dryrun_failure=True, xtrace=True,
+                                    expected_message="interpretar/mapear")
+    assert "dryrun" in failed_dryrun_calls
     applied, calls, _ = case("import_apply", configured=True, check=False)
     assert "apply" in calls and "curl" in calls
     assert (applied / "state/rancher-import.sha256").is_file()
     case("import_hash_check", configured=True, existing=agent(), state=applied / "state")
+    controller_agent = agent()
+    controller_spec = controller_agent["spec"]["template"]["spec"]
+    controller_spec["containers"][0]["env"].append({"name": "CATTLE_FEATURES", "value": "mcma=true"})
+    controller_spec["volumes"] = [{"name": "cattle-credentials", "secret": {"secretName": "controller-managed"}}]
+    controller_spec["containers"][0]["volumeMounts"] = [{"name": "cattle-credentials", "mountPath": "/cattle-credentials"}]
+    preserved, preserved_calls, _ = case("unchanged_manifest_preserves_controller", configured=True,
+                                         existing=controller_agent, state=applied / "state", check=False,
+                                         expected_message="serão preservados")
+    assert "apply" not in preserved_calls and "dryrun" not in preserved_calls
+    assert "rollout" in preserved_calls and preserved_calls.count("get") == 2
+    assert json.loads((preserved / "live.json").read_text()) == controller_agent
+    upgraded_agent = json.loads(json.dumps(controller_agent))
+    upgraded_agent["spec"]["template"]["spec"]["containers"][0]["image"] = "rancher/rancher-agent:v2.15.3"
+    upgraded, upgrade_calls, _ = case("unchanged_bootstrap_after_rancher_upgrade", configured=True,
+                                      existing=upgraded_agent, state=applied / "state", check=False,
+                                      rancher_version="auto", server_version="v2.15.3")
+    assert "apply" not in upgrade_calls and "dryrun" not in upgrade_calls
+    assert json.loads((upgraded / "live.json").read_text()) == upgraded_agent
+    assert json.loads((applied / "state/rancher-version.json").read_text())["version"] == "v2.15.3"
+    _, absent_calls, _ = case("missing_agent_reapplies_cached_manifest", configured=True,
+                              state=applied / "state", check=False)
+    assert "apply" in absent_calls and "dryrun" in absent_calls
+    _, uncached_calls, _ = case("existing_agent_missing_import_cache_applies", configured=True,
+                                existing=controller_agent, check=False)
+    assert "apply" in uncached_calls and "dryrun" in uncached_calls
+    preserved_hash = (applied / "state/rancher-import.sha256").read_text()
+    _, failed_preserved_calls, _ = case("unchanged_manifest_rollout_failure", configured=True,
+                                        existing=controller_agent, state=applied / "state", check=False,
+                                        expected=1, rollout_failure=True)
+    assert "apply" not in failed_preserved_calls
+    assert (applied / "state/rancher-import.sha256").read_text() == preserved_hash
     changed = agent()
     changed["metadata"]["labels"] = {"changed": "yes"}
     case("changed_hash", configured=True, existing=agent(), desired=changed,
          state=applied / "state", expected=1)
+    changed_applied, changed_calls, _ = case("changed_manifest_reapplied", configured=True,
+                                            existing=controller_agent, desired=changed,
+                                            state=applied / "state", check=False)
+    assert "apply" in changed_calls and "dryrun" in changed_calls
+    assert json.loads((changed_applied / "live.json").read_text()) == changed
+    assert (applied / "state/rancher-import.sha256").read_text() != preserved_hash
     case("foreign_manifest", configured=True, desired=agent("https://wrong.test"), check=False, expected=1)
     case("server_disguised", configured=True, desired=agent(image="rancher/rancher:v2.15.2"),
          check=False, expected=1)
