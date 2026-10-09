@@ -1,0 +1,9 @@
+cluster.env
+*.token
+*.log
+*.key
+*.pem
+/rancher-import*.yaml
+/rancher-*-import.yaml
+offline-cache/*/
+dist/
