@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -15,7 +16,12 @@ TOLERANCE = 8 * 1024 * 1024  # Alignment, GPT headers and LVM metadata.
 
 
 def run(*args):
-    return subprocess.check_output(args, text=True, stderr=subprocess.PIPE, timeout=120)
+    try:
+        return subprocess.check_output(args, text=True, stderr=subprocess.PIPE, timeout=120)
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or '').strip()
+        raise ValueError('%s falhou (código %s)%s' %
+                         (args[0], error.returncode, ': ' + detail if detail else '.')) from error
 
 
 def number(value):
@@ -52,6 +58,22 @@ def lvm_report(command, fields, section, *extra):
     return data['report'][0][section]
 
 
+def root_logical_volume(source):
+    device = os.stat(source)
+    if not stat.S_ISBLK(device.st_mode):
+        raise ValueError('O dispositivo raiz não é um dispositivo de bloco.')
+    identity = (os.major(device.st_rdev), os.minor(device.st_rdev))
+    # /dev/dm-N is a kernel device name, not a VG/LV selector for lvs.
+    # Match the active LV by device identity, independent of names and symlinks.
+    volumes = lvm_report('lvs', 'lv_path,vg_name,lv_size,lv_attr,segtype,lv_kernel_major,lv_kernel_minor', 'lv')
+    matches = [lv for lv in volumes
+               if (number(lv['lv_kernel_major']), number(lv['lv_kernel_minor'])) == identity]
+    if len(matches) != 1:
+        raise ValueError('Não foi possível identificar um único LV ativo para a raiz %s (%s:%s); '
+                         'nenhum volume será expandido.' % (source, *identity))
+    return matches[0]
+
+
 def inspect():
     root = json.loads(run('findmnt', '-J', '-n', '-o', 'SOURCE,FSTYPE,OPTIONS', '/'))['filesystems'][0]
     source = os.path.realpath(root['source'])
@@ -66,11 +88,11 @@ def inspect():
              'grow_pv': False, 'vg_free_bytes': 0}
     backing = source
     if node['type'] == 'lvm':
-        lv = lvm_report('lvs', 'lv_path,vg_name,lv_size,lv_attr,segtype', 'lv', source)
-        if len(lv) != 1 or lv[0]['segtype'].strip() != 'linear' or not lv[0]['lv_attr'].startswith('-'):
+        lv = root_logical_volume(source)
+        if lv['segtype'].strip() != 'linear' or not lv['lv_attr'].startswith('-'):
             raise ValueError('LVM thin/snapshot/RAID não admite expansão automática nesta instalação.')
-        state['lv_path'] = lv[0]['lv_path'].strip()
-        state['vg_name'] = lv[0]['vg_name'].strip()
+        state['lv_path'] = lv['lv_path'].strip()
+        state['vg_name'] = lv['vg_name'].strip()
         pvs = [p for p in lvm_report('pvs', 'pv_name,vg_name,pv_size', 'pv')
                if p['vg_name'].strip() == state['vg_name']]
         if len(pvs) != 1:

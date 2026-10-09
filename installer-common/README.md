@@ -37,6 +37,9 @@ administrador; o helper não as sobrescreve.
 `HOST_DISK_AUTO_EXPAND=true` é o padrão. Espaço não aproveitado significa
 capacidade não alocada à raiz, não a existência de espaço livre para arquivos.
 A verificação percorre disco → última partição → PV → VG → LV → filesystem.
+O LV da raiz é identificado pelos números major/minor do dispositivo montado,
+inclusive quando o mount usa `/dev/dm-N` ou um alias em `/dev/mapper`. Não depende
+do nome do VG/LV; identificação ausente ou ambígua bloqueia qualquer expansão.
 Em layout simples, expande a última partição raiz/PV, o PV, o LV raiz com todo
 o espaço livre do seu VG e o ext4/XFS, sem apagar arquivos. São salvos a tabela
 de partições e os metadados LVM antes da alteração. A expansão é permanente.

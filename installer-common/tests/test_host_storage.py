@@ -4,11 +4,15 @@ import copy
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import stat
+import subprocess
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
@@ -29,19 +33,29 @@ class Inventory:
         self.root_type = root_type
         self.part_type = part_type
         self.calls = []
+        self.root_source = '/dev/dm-0'
+        self.root_device = '/dev/dm-0'
+        self.root_major = 253
+        self.root_minor = 0
+        self.root_mode = stat.S_IFBLK | 0o600
+        self.volumes = [{'lv_path': '/dev/vg/root', 'vg_name': 'vg', 'lv_size': self.root_size,
+                         'lv_attr': '-wi-ao----', 'segtype': 'linear',
+                         'lv_kernel_major': '253', 'lv_kernel_minor': '0'}]
 
     def run(self, *cmd):
         self.calls.append(cmd)
         if cmd[0] == 'findmnt':
-            return json.dumps({'filesystems': [{'source': '/dev/dm-0', 'fstype': 'ext4', 'options': 'rw,relatime'}]})
+            return json.dumps({'filesystems': [{'source': self.root_source, 'fstype': 'ext4', 'options': 'rw,relatime'}]})
         if cmd[0] == 'lsblk':
-            lv = {'name': 'dm-0', 'path': '/dev/dm-0', 'type': self.root_type, 'size': self.root_size, 'pkname': 'vda3'}
+            lv = {'name': Path(self.root_device).name, 'path': self.root_device, 'type': self.root_type, 'size': self.root_size, 'pkname': 'vda3'}
             return json.dumps({'blockdevices': [
                 {'name': 'vda', 'path': '/dev/vda', 'type': 'disk', 'size': 64*GIB+2*MIB+self.tail, 'pkname': None,
                  'children': [{'name': 'vda3', 'path': '/dev/vda3', 'type': self.part_type, 'size': self.pv_size, 'pkname': 'vda', 'children': [lv]}]}]})
         if cmd[0] == 'lvs':
-            return json.dumps({'report': [{'lv': [{'lv_path': '/dev/vg/root', 'vg_name': 'vg', 'lv_size': self.root_size,
-                                                  'lv_attr': '-wi-ao----', 'segtype': 'linear'}]}]})
+            # Unlike the old mock, model LVM's rejection of a /dev/dm-N selector.
+            if len(cmd) > 8:
+                raise subprocess.CalledProcessError(5, cmd, stderr='Volume group "dm-0" not found\n')
+            return json.dumps({'report': [{'lv': self.volumes}]})
         if cmd[0] == 'pvs':
             return json.dumps({'report': [{'pv': [{'pv_name': '/dev/vda3', 'vg_name': 'vg', 'pv_size': self.pv_size-4*MIB}]}]})
         if cmd[0] == 'vgs':
@@ -55,14 +69,84 @@ class Inventory:
 
     def inspect(self):
         original = Path.read_text
+        original_stat = storage.os.stat
+        original_realpath = storage.os.path.realpath
         def read(path, *args, **kwargs):
             if str(path) == '/sys/class/block/vda3/partition': return '3\n'
             return original(path, *args, **kwargs)
-        with patch.object(storage, 'run', self.run), patch.object(storage, 'filesystem_size', return_value=self.root_size), patch.object(Path, 'read_text', read):
+        def device_stat(path, *args, **kwargs):
+            if os.fspath(path) == self.root_device:
+                return SimpleNamespace(st_mode=self.root_mode, st_rdev=os.makedev(self.root_major, self.root_minor))
+            return original_stat(path, *args, **kwargs)
+        def realpath(path, *args, **kwargs):
+            if os.fspath(path) == self.root_source: return self.root_device
+            return original_realpath(path, *args, **kwargs)
+        with patch.object(storage, 'run', self.run), patch.object(storage, 'filesystem_size', return_value=self.root_size), \
+             patch.object(Path, 'read_text', read), patch.object(storage.os, 'stat', device_stat), \
+             patch.object(storage.os.path, 'realpath', realpath):
             return storage.inspect()
 
 
 class StorageTests(unittest.TestCase):
+    def test_dm_root_is_not_used_as_lvs_selector(self):
+        fixture = Inventory()
+        self.assertEqual(fixture.inspect()['lv_path'], '/dev/vg/root')
+        commands = [cmd for cmd in fixture.calls if cmd[0] == 'lvs']
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands[0]), 8)
+        self.assertIn('lv_kernel_major', commands[0][7].split(','))
+        self.assertIn('lv_kernel_minor', commands[0][7].split(','))
+
+    def test_named_mapper_root_selects_device_identity_among_other_lvs(self):
+        fixture = Inventory()
+        fixture.root_source = '/dev/mapper/ubuntu--vg-root--lv'
+        fixture.root_device = '/dev/dm-7'
+        fixture.root_minor = 7
+        fixture.volumes[0].update(lv_path='/dev/ubuntu-vg/root-lv', vg_name='ubuntu-vg', lv_kernel_minor=' 7 ')
+        # Same minor on another major and an inactive LV must not match.
+        other = copy.deepcopy(fixture.volumes[0]); other.update(lv_path='/dev/other/data', lv_kernel_major='252')
+        inactive = copy.deepcopy(other); inactive.update(lv_path='/dev/other/inactive', lv_kernel_major='-1', lv_kernel_minor='-1')
+        fixture.volumes = [other, inactive, fixture.volumes[0]]
+        original = fixture.run
+        def run(*cmd):
+            result = original(*cmd)
+            if cmd[0] == 'pvs':
+                data = json.loads(result); data['report'][0]['pv'][0]['vg_name'] = 'ubuntu-vg'; return json.dumps(data)
+            return result
+        fixture.run = run
+        state = fixture.inspect()
+        self.assertEqual(state['source'], '/dev/dm-7')
+        self.assertEqual(state['lv_path'], '/dev/ubuntu-vg/root-lv')
+        self.assertEqual(state['vg_name'], 'ubuntu-vg')
+
+    def test_unmatched_device_blocks_before_any_volume_mutation(self):
+        fixture = Inventory(); fixture.volumes[0]['lv_kernel_minor'] = '1'
+        with self.assertRaisesRegex(ValueError, 'um único LV ativo'): fixture.inspect()
+        self.assertEqual([cmd[0] for cmd in fixture.calls], ['findmnt', 'lsblk', 'lvs'])
+
+    def test_ambiguous_device_blocks_before_any_volume_mutation(self):
+        fixture = Inventory(); duplicate = copy.deepcopy(fixture.volumes[0])
+        duplicate['lv_path'] = '/dev/other/data'; fixture.volumes.append(duplicate)
+        with self.assertRaisesRegex(ValueError, 'nenhum volume será expandido'): fixture.inspect()
+        self.assertEqual([cmd[0] for cmd in fixture.calls], ['findmnt', 'lsblk', 'lvs'])
+
+    def test_regular_file_cannot_be_identified_as_root_lv(self):
+        fixture = Inventory(); fixture.root_mode = stat.S_IFREG | 0o600
+        with self.assertRaisesRegex(ValueError, 'não é um dispositivo de bloco'): fixture.inspect()
+        self.assertFalse(any(cmd[0] == 'lvs' for cmd in fixture.calls))
+
+    def test_storage_command_failure_includes_captured_diagnostic(self):
+        error = subprocess.CalledProcessError(5, ('lvs',), stderr='  Failed to read volume group\n')
+        with patch.object(storage.subprocess, 'check_output', side_effect=error):
+            with self.assertRaisesRegex(ValueError, r'lvs falhou \(código 5\): Failed to read volume group'):
+                storage.run('lvs')
+
+    def test_storage_command_failure_without_stderr_is_clear(self):
+        error = subprocess.CalledProcessError(5, ('lvs',))
+        with patch.object(storage.subprocess, 'check_output', side_effect=error):
+            with self.assertRaisesRegex(ValueError, r'lvs falhou \(código 5\)\.'):
+                storage.run('lvs')
+
     def test_free_vg_is_not_already_used(self):
         state = Inventory().inspect()
         self.assertTrue(storage.pending(state))
